@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Diamond Sim — 3D Baseball Simulator</title>
+  <meta name="description" content="A physics-driven 9-on-9 baseball simulation in 3D. Editable rosters, pitch types, fielding, baserunning and a broadcast camera.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='28' fill='%23fff' stroke='%23ccc' stroke-width='2'/%3E%3Cpath d='M14 14c8 8 8 28 0 36M50 14c-8 8-8 28 0 36' fill='none' stroke='%23d33' stroke-width='3' stroke-dasharray='3 3'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="app" class="nogame">
+    <div id="view"></div>
+
+    <!-- Broadcast scorebug -->
+    <div id="scorebug" class="hud">
+      <div class="teams">
+        <div class="trow" id="sb-away"><span class="chip"></span><span class="abbr"></span><span class="runs"></span></div>
+        <div class="trow" id="sb-home"><span class="chip"></span><span class="abbr"></span><span class="runs"></span></div>
+      </div>
+      <div class="inning"><span id="sb-arrow">▲</span><span id="sb-inning">1</span></div>
+      <svg id="sb-bases" viewBox="0 0 60 44" aria-label="Runners on base">
+        <rect data-b="2" x="23" y="3" width="14" height="14" transform="rotate(45 30 10)"/>
+        <rect data-b="1" x="39" y="19" width="14" height="14" transform="rotate(45 46 26)"/>
+        <rect data-b="3" x="7" y="19" width="14" height="14" transform="rotate(45 14 26)"/>
+      </svg>
+      <div class="count">
+        <div id="sb-count">0-0</div>
+        <div class="outs" id="sb-outs"><i></i><i></i><i></i></div>
+      </div>
+    </div>
+
+    <div id="pitchinfo" class="hud hidden">
+      <div class="mph"><span id="pi-mph">--</span><small>MPH</small></div>
+      <div class="pdesc"><div id="pi-type">&nbsp;</div><div id="pi-result">&nbsp;</div></div>
+    </div>
+
+    <div id="banner" class="hidden"></div>
+
+    <div id="matchup" class="hud">
+      <div class="who"><span class="lbl">AB</span><span id="mu-batter">—</span></div>
+      <div class="sub" id="mu-batter-sub"></div>
+      <div class="who"><span class="lbl">P</span><span id="mu-pitcher">—</span></div>
+      <div class="sub" id="mu-pitcher-sub"></div>
+    </div>
+
+    <div id="zone" class="hud" title="Pitch locations this at-bat (pitcher's view)">
+      <svg id="zone-svg" viewBox="0 0 120 140"></svg>
+    </div>
+
+    <aside id="pbp" class="panel">
+      <header><h2>Play-by-play</h2><button class="icon" id="pbp-close" aria-label="Close play-by-play">✕</button></header>
+      <ol id="pbp-list"></ol>
+    </aside>
+
+    <nav id="controls">
+      <button id="btn-play" class="primary" title="Pause / resume (Space)">⏸</button>
+      <div class="seg" id="speed">
+        <button data-speed="0.5">½×</button>
+        <button data-speed="1" class="on">1×</button>
+        <button data-speed="2">2×</button>
+        <button data-speed="4">4×</button>
+      </div>
+      <button id="btn-next" title="Skip to next batter (N)">Next AB</button>
+      <button id="btn-inning" title="Skip to next half-inning">Sim ½ inn</button>
+      <button id="btn-end" title="Simulate to the end">Sim game</button>
+      <select id="camera" title="Camera (C)">
+        <option value="broadcast">Broadcast cam</option>
+        <option value="plate">Umpire cam</option>
+        <option value="overhead">Overhead</option>
+        <option value="orbit">Free orbit</option>
+      </select>
+      <button id="btn-log" title="Play-by-play (L)">Log</button>
+      <button id="btn-box" title="Box score (B)">Box</button>
+      <button id="btn-sound" title="Sound on/off">🔊</button>
+      <button id="btn-new" title="New game">New game</button>
+    </nav>
+
+    <!-- Setup -->
+    <div class="modal" id="setup">
+      <div class="card">
+        <h1><span class="ball"></span>Diamond Sim</h1>
+        <p class="lede">A physics-driven 9-on-9 baseball simulation. Pick two clubs and their starting pitchers, then sit back and watch.</p>
+        <div class="matchup-pick">
+          <div class="side">
+            <label for="away-team">Away</label>
+            <select id="away-team"></select>
+            <label for="away-sp">Starting pitcher</label>
+            <select id="away-sp"></select>
+          </div>
+          <div class="vs">@</div>
+          <div class="side">
+            <label for="home-team">Home</label>
+            <select id="home-team"></select>
+            <label for="home-sp">Starting pitcher</label>
+            <select id="home-sp"></select>
+          </div>
+        </div>
+        <label class="check"><input type="checkbox" id="opt-ghost" checked> Extra innings start with a runner on second</label>
+        <div class="actions">
+          <button id="btn-edit">Edit rosters</button>
+          <button id="btn-start" class="primary big">Play ball</button>
+        </div>
+        <p class="fine">Tip: Space pauses, N skips to the next batter, C cycles cameras. Drag in Free orbit to look around.</p>
+      </div>
+    </div>
+
+    <!-- Box score -->
+    <div class="modal hidden" id="boxscore">
+      <div class="card wide">
+        <header class="mhead"><h2>Box score</h2><button class="icon" data-close="boxscore" aria-label="Close">✕</button></header>
+        <div id="box-body"></div>
+        <div class="actions"><button id="box-new" class="primary hidden">New game</button><button data-close="boxscore">Close</button></div>
+      </div>
+    </div>
+
+    <!-- Roster editor -->
+    <div class="modal hidden" id="editor">
+      <div class="card wide editor">
+        <header class="mhead"><h2>Roster editor</h2><button class="icon" data-close="editor" aria-label="Close">✕</button></header>
+        <div class="ed-top">
+          <select id="ed-team"></select>
+          <button id="ed-add">+ New team</button>
+          <button id="ed-del" class="danger">Delete team</button>
+          <span class="grow"></span>
+          <button id="ed-export">Export JSON</button>
+          <label class="btn" for="ed-import">Import JSON</label>
+          <input type="file" id="ed-import" accept="application/json,.json" hidden>
+          <button id="ed-reset" class="danger">Reset all</button>
+        </div>
+        <div id="ed-body"></div>
+        <div class="actions"><span id="ed-status" class="fine"></span><button id="ed-save" class="primary">Save &amp; close</button></div>
+      </div>
+    </div>
+
+    <div id="loading">Building the ballpark…</div>
+  </div>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

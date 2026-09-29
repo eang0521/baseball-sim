@@ -756,7 +756,8 @@ export class Game {
     const chainTxt = res.chain.join('-');
     const firstPos = res.chain.length ? Object.keys(POS_NUM).find((k) => POS_NUM[k] === res.chain[0]) : null;
     let dirTxt = '';
-    if (res.firstLanding) dirTxt = describeDirection(res.firstLanding.x, res.firstLanding.y);
+    if (bb.type === 'ground' && firstPos) dirTxt = { LF: 'left', CF: 'center', RF: 'right', SS: 'short', '2B': 'second', '3B': 'third', '1B': 'first', P: 'the pitcher', C: 'the catcher' }[firstPos];
+    else if (res.firstLanding) dirTxt = describeDirection(res.firstLanding.x, res.firstLanding.y);
     else if (firstPos) dirTxt = POS_NAME[firstPos];
     const stat = `EV ${bb.ev.toFixed(1)} mph, LA ${Math.round(bb.la)}°${bb.type !== 'ground' ? `, ${Math.round(res.distance / FT)} ft` : ''}`;
     let t;

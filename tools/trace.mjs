@@ -14,7 +14,7 @@ s.bases = [null, b1 ? L[5] : null, b2 ? L[6] : null, b3 ? L[7] : null];
 s.outs = outs || 0;
 s.batter = L[0];
 g.resetPositions();
-const bb = { ev, la, spray, type: la < 10 ? 'ground' : 'line' };
+const bb = { ev, la, spray, type: la < 10 ? 'ground' : 'line', bunt: !!process.env.BUNT };
 const { v, w } = battedBallVector(bb);
 Object.assign(g.world.ball.phys, makeBall({ x: 0, y: 0.55, z: 0.9 }, v, w));
 g.onEvent = (e) => { if (e.type !== 'pitch') console.log(`  [${p.t.toFixed(2)}] event`, e.type, e.how || '', e.runner?.name || '', e.from||'', e.to||'', e.base ?? ''); };

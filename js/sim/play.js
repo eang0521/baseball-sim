@@ -22,11 +22,16 @@ function baseDist(ax, ay, b) {
 }
 
 export class Play {
-  constructor(game, batted) {
+  // opts.steal: runners are stealing and the catcher has the ball (no batted ball)
+  // opts.runnerState: Map(player -> { s, v }) for runners already moving at contact
+  constructor(game, batted, opts = {}) {
     this.g = game;
     this.rng = game.rng;
     this.ball = game.world.ball.phys;
-    this.batted = batted;
+    this.steal = !!opts.steal;
+    this.batted = batted || { ev: 0, la: 0, spray: 0, type: 'steal' };
+    batted = this.batted;
+    this.bunt = !!batted.bunt;
     this.t = 0;
     this.fielders = game.world.fielders;
     this.outsBefore = game.state.outs;
@@ -56,8 +61,12 @@ export class Play {
     for (const f of this.fielders) {
       f.role = 'hold';
       f.target = { x: f.x, y: f.y };
-      f.react = 0.1 + (100 - (f.player.fielding ?? 50)) * 0.0025 + (f.pos === 'P' ? 0.3 : 0) +
-        (INFIELD.has(f.pos) ? 0 : 0.35 + (batted.la < 25 ? 0.3 : 0.1));
+      f.react = 0.06 + (100 - (f.player.fielding ?? 50)) * 0.002 + (f.pos === 'P' && !this.bunt ? 0.3 : 0) +
+        (INFIELD.has(f.pos) ? 0 : 0.35 + (batted.la < 25 ? 0.22 : 0.1));
+      if (this.bunt && ['1B', '3B', 'P', 'C'].includes(f.pos)) {
+        // a sacrifice is expected; a bunt for a hit catches the defense by surprise
+        f.react = batted.buntKind === 'sac' ? 0.08 : f.pos === 'P' ? 0.38 : 0.28;
+      }
       f.cool = 0;
       f.stun = 0;
       f.dived = false;
@@ -74,17 +83,80 @@ export class Play {
     for (let k = 3; k >= 1; k--) {
       if (bases[k]) this.runners.push(this.makeRunner(bases[k], k));
     }
-    for (const r of this.runners) r.v = 2.0;
-    this.batterRunner = this.makeRunner(game.state.batter, 0);
-    this.batterRunner.delay = 0.3;
-    this.runners.push(this.batterRunner);
+    for (const r of this.runners) {
+      // on a bunt, runners wait to see the ball go down
+      r.v = this.bunt ? 1.0 : 2.0;
+      if (this.bunt) r.delay = 0.1;
+      const st = opts.runnerState && opts.runnerState.get(r.player);
+      if (st) {
+        r.s = st.s;
+        r.v = st.v;
+        r.stealing = true;
+        this.placeRunner(r);
+      }
+    }
+    if (!this.steal) {
+      this.batterRunner = this.makeRunner(game.state.batter, 0);
+      this.batterRunner.delay = this.bunt ? (batted.buntKind === 'hit' ? 0 : 0.12) : 0.3;
+      if (batted.buntKind === 'hit') this.batterRunner.v = 2.5; // already moving out of the box
+      this.runners.push(this.batterRunner);
+    } else {
+      this.batterRunner = null;
+    }
     // order: most advanced first
     this.runners.sort((a, b) => b.origin - a.origin);
     game.world.runners = this.runners;
 
+    if (this.steal) {
+      this.setupSteal(opts);
+      return;
+    }
     this.distance = carryDistance(this.ball);
     this.replan();
     this.initialRunnerDecisions();
+  }
+
+  setupSteal(opts) {
+    this.distance = 0;
+    this.touched = true;
+    this.batAir = false;
+    this.ballAir = false;
+    this.fair = 'fair';
+    const by = this.fielderByPos;
+    const c = by.C;
+    this.holder = c;
+    c.hasBall = true;
+    c.react = 0;
+    // exchange time: glove to hand, set and throw
+    c.transfer = 0.78 - (c.player.arm ?? 50) * 0.0018 - (c.player.fielding ?? 50) * 0.0012 + this.rng.gauss(0, 0.08);
+    c.decideAt = this.t + c.transfer;
+    const lefty = opts.batterSide === 'L';
+    const covers = { 1: by['1B'], 2: lefty ? by.SS : by['2B'], 3: by['3B'], 4: c };
+    this.plan = { chaser: null, ci: null, covers, icpts: new Map() };
+    for (const f of this.fielders) {
+      f.react = 0.15;
+      const cov = Object.entries(covers).find(([, cf]) => cf === f);
+      if (cov && f !== c) {
+        const bp = BASES[+cov[0] % 4];
+        f.role = 'cover';
+        f.target = { x: bp.x - bp.x * 0.012, y: bp.y - bp.y * 0.012 };
+      } else if (f.pos === 'SS' || f.pos === '2B') {
+        // the other middle infielder backs up the throw
+        f.role = 'backup';
+        f.target = { x: BASES[2].x + (f.pos === 'SS' ? -3 : 3), y: BASES[2].y + 5 };
+      } else if (f.pos === 'CF') {
+        f.role = 'backup';
+        f.target = { x: 0, y: 60 };
+      } else {
+        f.role = 'hold';
+        f.target = { x: f.x, y: f.y };
+      }
+    }
+    for (const r of this.runners) {
+      if (r.stealing) r.goalS = (r.origin + 1) * BD;
+      else r.goalS = r.origin * BD;
+    }
+    this.enforceSpacing();
   }
 
   makeRunner(player, origin) {
@@ -191,7 +263,7 @@ export class Play {
     if (this.isForced(r) && nb === r.origin + 1) return true;
     const margin = this.ballETA(nb) - this.runnerETA(r, nb);
     const outs = this.outsBefore + this.outs.length;
-    let thr = 0.35 + (nb === 4 ? 0.2 : 0) + (nb === 3 ? 1.1 : 0) - (outs === 2 ? 0.3 : 0);
+    let thr = 0.35 + (nb === 4 ? 0.2 : 0) + (nb === 3 ? 1.1 : 0) + (nb === 2 ? 0.55 : 0) - (outs === 2 ? 0.3 : 0);
     thr -= ((r.player.speed ?? 50) - 50) * 0.004;
     thr += this.rng.gauss(0, 0.22) + extra;
     return margin > thr;
@@ -229,7 +301,7 @@ export class Play {
       if (!it) continue;
       icpts.set(f, it);
       let pen = 0;
-      if (f.pos === 'P') pen += 0.45;
+      if (f.pos === 'P' && !this.bunt) pen += 0.45;
       if (f.pos === 'C' && Math.hypot(it.x, it.y) > 14) pen += 0.4;
       // outfielders call off infielders on catchable flies
       if (it.air && !INFIELD.has(f.pos) && Math.hypot(it.x, it.y) > 45) pen -= 0.3;
@@ -257,10 +329,17 @@ export class Play {
       return null;
     };
     const left = ci ? ci.x < 0 : true;
-    covers[1] = pickCover('1B', 'P', '2B');
-    covers[2] = left ? pickCover('2B', 'SS') : pickCover('SS', '2B');
-    covers[3] = pickCover('3B', 'SS', 'P');
-    covers[4] = pickCover('C', 'P');
+    if (this.bunt && this.batted.buntKind === 'sac') {
+      covers[1] = pickCover('2B', '1B');
+      covers[2] = pickCover('SS', '2B');
+      covers[3] = pickCover('3B', 'SS', 'P');
+      covers[4] = pickCover('C', 'P');
+    } else {
+      covers[1] = pickCover('1B', 'P', '2B');
+      covers[2] = left ? pickCover('2B', 'SS') : pickCover('SS', '2B');
+      covers[3] = pickCover('3B', 'SS', 'P');
+      covers[4] = pickCover('C', 'P');
+    }
     this.plan = { chaser, ci, covers, icpts };
 
     for (const f of this.fielders) {
@@ -344,8 +423,13 @@ export class Play {
         }
         continue;
       }
-      if (forced) {
+      if (forced || r.stealing) {
         this.setGoal(r, r.origin + 1);
+        continue;
+      }
+      if (this.bunt) {
+        if (r.origin < 3) this.setGoal(r, r.origin + 1);
+        else r.goalS = r.origin * BD;
         continue;
       }
       const grounder = la < 10 && ci && INFIELD.has(this.plan.chaser.pos);
@@ -431,6 +515,7 @@ export class Play {
     const isThrow = !!this.throwInfo;
     this.holder = f;
     f.hasBall = true;
+    f.heldT = 0;
     this.throwInfo = null;
     this.pushChain(f);
     f.anim = 'catch';
@@ -461,10 +546,16 @@ export class Play {
     const b = this.ball;
     const sp = Math.hypot(b.v.x, b.v.y, b.v.z);
     let p;
+    let runPen = 0;
     if (this.throwInfo) p = kind === 'dive' ? 0.4 : 0.992;
     else if (kind === 'dive') p = 0.32 + fld * 0.0042;
-    else if (air) p = 0.99 + fld * 0.00008 - Math.max(0, sp - 34) * 0.006;
-    else p = 0.972 + fld * 0.00025 - Math.max(0, sp - 30) * 0.007;
+    else if (air) {
+      p = 0.993 + fld * 0.00005 - Math.max(0, sp - 34) * 0.006;
+      // catches made on a full sprint are far from automatic
+      runPen = Math.min(0.6, Math.max(0, f.spd - 3) * 0.15) * (1.25 - fld / 200);
+      p -= runPen;
+    }
+    else p = 0.977 + fld * 0.0002 - Math.max(0, sp - 30) * 0.007;
     if (this.rng.chance(p)) {
       if (kind === 'dive') f.stun = 0.8;
       f.anim = kind === 'dive' ? 'dive' : 'catch';
@@ -482,7 +573,7 @@ export class Play {
     }
     // bobble
     const wasThrow = !!this.throwInfo;
-    const tough = !wasThrow && (air ? sp > 30 : sp > 29);
+    const tough = !wasThrow && (air ? sp > 30 || runPen > 0.08 : sp > 29);
     if (!tough) this.errors.push({ pos: f.pos, player: f.player, t: this.t });
     if (!this.touched) this.touched = true;
     const a = this.rng.range(0, Math.PI * 2);
@@ -541,9 +632,11 @@ export class Play {
       cands.push({ r, b, self, rec, margin });
     }
     let best = null, bv = -Infinity;
+    const minMargin = this.steal && h.pos === 'C' ? -0.7 : 0.08;
     for (const c of cands) {
-      if (c.margin < 0.08) continue;
-      const v = c.b + Math.min(c.margin, 1) * 1.2;
+      if (c.margin < minMargin) continue;
+      // take the sure out unless the lead runner is clearly beaten
+      const v = (c.margin > 0.3 ? c.b : 0) + Math.min(c.margin, 1) * 2;
       if (v > bv) { bv = v; best = c; }
     }
     if (best) {
@@ -636,7 +729,8 @@ export class Play {
       const overrun = r.isBatter && r.s >= BD - 0.1 && r.goalS <= BD + 0.01;
       if (onBase || overrun || r.delay > 0) continue;
       if (r.s < 0.5) continue;
-      if (Math.hypot(r.x - h.x, r.y - h.y) < 1.25) {
+      // applying a tag takes a moment after the catch
+      if ((h.heldT || 0) >= 0.12 && Math.hypot(r.x - h.x, r.y - h.y) < 1.25) {
         this.recordOut(r, 'tag', h);
         if (this.done) return;
       }
@@ -790,6 +884,7 @@ export class Play {
       const vmax = fielderVmax(f.player);
 
       if (f === this.holder) {
+        f.heldT = (f.heldT || 0) + dt;
         if (f.carryTo != null) {
           const bp = BASES[f.carryTo % 4];
           const rem = moveToward(f, bp.x, bp.y, vmax, FIELDER_ACCEL, dt, 20);
@@ -826,7 +921,10 @@ export class Play {
         // step into the ball's path
         const d = Math.hypot(ball.p.x - f.x, ball.p.y - f.y);
         const v2 = ball.v.x * ball.v.x + ball.v.y * ball.v.y;
-        if (d < 8 && v2 > 1) {
+        if (v2 < 64) {
+          // slow roller: charge it
+          tx = ball.p.x + ball.v.x * 0.25; ty = ball.p.y + ball.v.y * 0.25;
+        } else if (d < 8) {
           const tt = ((f.x - ball.p.x) * ball.v.x + (f.y - ball.p.y) * ball.v.y) / v2;
           if (tt > 0) { tx = ball.p.x + ball.v.x * tt; ty = ball.p.y + ball.v.y * tt; } else { tx = ball.p.x; ty = ball.p.y; }
         }
@@ -842,9 +940,11 @@ export class Play {
       const bsp = Math.hypot(ball.v.x, ball.v.y, ball.v.z);
       let reach = (air ? 1.0 : INFIELD.has(f.pos) ? 1.0 : 0.8) *
         (this.throwInfo ? 1.2 : Math.max(0.55, Math.min(1, 1.35 - bsp / 75)));
-      if (f.pos === 'P' && !this.throwInfo) reach *= 0.6;
+      if (f.pos === 'P' && !this.throwInfo && !this.bunt) reach *= 0.6;
       const zOk = air ? z > 0.05 && z < 2.9 : z < 1.5;
       if (this.throwInfo && this.throwInfo.from === f) { f.prevBallDist = dxy; continue; }
+      // a bunt pushed down into the ground can't be caught on the fly
+      if (this.bunt && this.batAir && this.batted.la < 15) { f.prevBallDist = dxy; continue; }
       if (dxy < reach && zOk) {
         attempted = true;
         this.attempt(f, 'normal', air);
@@ -988,7 +1088,7 @@ export class Play {
     // a runner who must retouch doesn't score
     const br = this.batterRunner;
     let batterBase = 0;
-    if (!br.out) {
+    if (br && !br.out) {
       if (this.trot) batterBase = 4;
       else if (br.scored) batterBase = 4;
       else batterBase = Math.max(1, Math.round(br.s / BD));
@@ -1010,7 +1110,9 @@ export class Play {
       runs,
       errors: this.errors,
       chain: this.chain,
-      batterOut: br.out,
+      batterOut: br ? br.out : false,
+      runners: this.runners,
+      steal: this.steal,
       batterBase,
       bases,
       firstLanding: this.firstLanding,

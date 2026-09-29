@@ -90,7 +90,7 @@ export function planPitch(rng, pitcher, pc, count, batterSide, lastType) {
     }
   }
   const control = pitcher.control ?? 50;
-  let sig = (0.085 + (100 - control) * 0.0015) * (1 + 0.55 * f) * (BREAKING.has(type) ? 1.12 : 1);
+  let sig = (0.1 + (100 - control) * 0.0015) * (1 + 0.55 * f) * (BREAKING.has(type) ? 1.12 : 1);
   const ax = tx + rng.gauss(0, sig);
   const az = tz + rng.gauss(0, sig * 0.9);
 
@@ -117,8 +117,8 @@ export function swingDecision(rng, batter, pitch, count) {
   const pz = pitch.plate.z + rng.gauss(0, sp);
   const d = zoneDistance(px, pz);
   const { balls, strikes } = count;
-  let maxS = 0.86, c = 0.042;
-  if (balls === 0 && strikes === 0) { maxS = 0.74; c = 0.025; }
+  let maxS = 0.87, c = 0.055;
+  if (balls === 0 && strikes === 0) { maxS = 0.62; c = 0.02; }
   if (strikes === 2) { maxS = 0.95; c = 0.08; }
   if (balls === 3 && strikes === 0) { maxS = 0.12; c = -0.05; }
   if (balls === 3 && strikes === 1) maxS = 0.88;
@@ -143,7 +143,7 @@ export function resolveSwing(rng, batter, pitcher, pitch, side, platoon) {
   const locPen = Math.max(0, edge - 0.45) * 0.55 + Math.max(0, edge - 1) * 1.3;
 
   const difficulty = Math.max(0.55, 1 + 0.16 * speedTerm + stuffTerm * 0.45 + locPen);
-  const sigV = 0.054 * (1.42 - contact / 100) * difficulty;
+  const sigV = 0.0525 * (1.42 - contact / 100) * difficulty;
   const bias = { FF: 0.012, SI: -0.012, FC: -0.004, SL: -0.009, CU: -0.017, CH: -0.012, FS: -0.02 }[t] || 0;
   const muV = bias * (0.5 + pitch.rating / 100) + (z - ZONE.mid) * 0.045;
   const v = rng.gauss(muV, sigV);
@@ -159,7 +159,7 @@ export function resolveSwing(rng, batter, pitcher, pitch, side, platoon) {
   if (Math.abs(q) > 0.93) return { contact: true, foulTip: true, q };
   if (Math.abs(q) > 0.62) return { contact: true, foulBack: true, q, tErr };
   const qn = q / 0.62;
-  const batSpeed = 69.5 + power * 0.155;
+  const batSpeed = 71 + power * 0.155;
   const eMax = 0.2 * pitch.mph + 1.2 * batSpeed;
   const timingF = 1 - Math.min(0.45, (tErr / 0.03) ** 2 * 0.35);
   let ev = eMax * (1 - 0.5 * Math.abs(qn + 0.08) ** 1.5) * timingF + rng.gauss(0, 3);
@@ -167,7 +167,7 @@ export function resolveSwing(rng, batter, pitcher, pitch, side, platoon) {
   const attack = 14 + (power - 50) * 0.12;
   const la = attack + qn * 45 + rng.gauss(0, 6);
   const hand = side === 'R' ? 1 : -1;
-  const spray = -hand * (tErr / 0.01) * 27 - hand * 5 + x * 55 + rng.gauss(0, 12);
+  const spray = -hand * (tErr / 0.01) * 27 - hand * 5 + x * 55 + rng.gauss(0, 17);
   return { contact: true, ev, la, spray, q, tErr };
 }
 
@@ -178,7 +178,7 @@ export function battedBallVector(bb) {
   const ph = (bb.spray * Math.PI) / 180;
   const v = { x: s * Math.cos(la) * Math.sin(ph), y: s * Math.cos(la) * Math.cos(ph), z: s * Math.sin(la) };
   let spin;
-  if (bb.la > 0) spin = Math.min(3000, 400 + bb.la * 50);
+  if (bb.la > 0) spin = Math.min(2600, 340 + bb.la * 42);
   else spin = -Math.min(1800, 600 + -bb.la * 25);
   spin *= RPM;
   const w = {
@@ -194,4 +194,56 @@ export function battedType(la) {
   if (la < 25) return 'line';
   if (la < 50) return 'fly';
   return 'popup';
+}
+
+// ---------- bunts ----------
+// Returns 'sac', 'hit' or null. Called before each pitch.
+export function buntDecision(rng, state, diff) {
+  const { bases: b, outs, strikes, inning } = state;
+  const bat = state.batter;
+  if (strikes >= 2 || outs >= 2) return null;
+  const weak = ((bat.contact ?? 50) + (bat.power ?? 50)) / 2 < 44;
+  const close = Math.abs(diff) <= 1;
+  // sacrifice: runner(s) on first and/or second, nobody on third, no outs
+  if (outs === 0 && (b[1] || b[2]) && !b[3] && diff > -3) {
+    let p = 0;
+    if (weak && close && inning >= 7) p = 0.55;
+    else if (close && inning >= 8) p = 0.12;
+    else if (weak) p = 0.05;
+    if (inning >= 10 && b[2] && !b[1] && close) p = Math.max(p, 0.3);
+    if (rng.chance(p)) return 'sac';
+  }
+  // bunt for a hit: speedy slap hitters, bases open ahead
+  const speed = bat.speed ?? 50;
+  if (!b[3] && speed >= 72 && (bat.power ?? 50) < 58 && strikes === 0) {
+    if (rng.chance(0.0035 * (speed - 70))) return 'hit';
+  }
+  return null;
+}
+
+export function resolveBunt(rng, batter, pitch, side, kind) {
+  const contact = batter.contact ?? 50;
+  const { x, z } = pitch.plate;
+  const out = Math.max(0, zoneDistance(x, z));
+  const breaking = !FASTBALLS.has(pitch.type);
+  const miss = 0.06 + (100 - contact) * 0.0012 + out * 1.5 + (breaking ? 0.04 : 0) + Math.max(0, pitch.mph - 94) * 0.006;
+  const r = rng.next();
+  if (r < miss) return { contact: false };
+  if (r < miss + 0.24) return { contact: true, foulBack: true, bunt: true, q: rng.range(-0.8, 0.8), tErr: 0 };
+  if (r < miss + 0.24 + 0.035 + (100 - contact) * 0.0004) {
+    // popped up
+    return { contact: true, bunt: true, ev: rng.range(22, 38), la: rng.range(40, 70), spray: rng.gauss(0, 25), q: 0.9, tErr: 0 };
+  }
+  const hand = side === 'R' ? 1 : -1;
+  const skill = contact / 100;
+  let spray;
+  if (kind === 'hit') {
+    // drag toward first (lefty) or push down the third-base line
+    spray = hand > 0 ? rng.gauss(-37, 4) : rng.gauss(24, 6);
+  } else {
+    spray = (rng.chance(0.55) ? -1 : 1) * rng.range(24, 40) * (0.8 + skill * 0.25);
+  }
+  const ev = kind === 'hit' ? rng.range(18, 29) : rng.range(15, 26) - skill * 2;
+  const la = rng.gauss(-7, 5);
+  return { contact: true, bunt: true, ev, la, spray, q: 0, tErr: 0 };
 }

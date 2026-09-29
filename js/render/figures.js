@@ -196,6 +196,7 @@ export class Figure {
       case 'follow': this.followThrough(t); break;
       case 'stance': this.stance(t); break;
       case 'swing': this.swing(t); break;
+      case 'bunt': this.buntPose(t); break;
       case 'throw': this.throwAnim(t, speed, dt); break;
       case 'catch':
         if (speed > 1) this.run(speed, dt); else this.crouch(0.25);
@@ -278,6 +279,19 @@ export class Figure {
     this.armR.rotation.set(-1.0, 0, back * 0.5);
     this.batPivot.position.set(back * 0.15, 0.45, 0.2);
     this.batPivot.rotation.set(-0.5, 0, back * 0.55);
+  }
+
+  // Squared around, bat level over the plate
+  buntPose(t) {
+    const back = this.hand === 'L' ? 1 : -1;
+    const k = Math.min(1, t / 0.25);
+    this.crouch(0.45);
+    this.legL.thigh.rotation.z = 0.2; this.legR.thigh.rotation.z = -0.2;
+    this.torso.rotation.y = -back * 1.35 * k;
+    this.armL.rotation.set(-1.25, 0, 0);
+    this.armR.rotation.set(-1.25, 0, 0);
+    this.batPivot.position.set(back * 0.12, 0.42, 0.42);
+    this.batPivot.rotation.set(0.15, 0, -back * Math.PI / 2 * k);
   }
 
   swing(t) {

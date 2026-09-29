@@ -11,12 +11,13 @@ export function ip(outs) {
 }
 
 function batToday(b) {
-  if (!b || !b.pa) return 'First PA today';
+  if (!b || (!b.pa && !b.sb)) return 'First PA today';
   const bits = [`${b.h}-for-${b.ab}`];
   if (b.hr) bits.push(b.hr > 1 ? `${b.hr} HR` : 'HR');
   if (b.t) bits.push(b.t > 1 ? `${b.t} 3B` : '3B');
   if (b.d) bits.push(b.d > 1 ? `${b.d} 2B` : '2B');
   if (b.rbi) bits.push(`${b.rbi} RBI`);
+  if (b.sb) bits.push(b.sb > 1 ? `${b.sb} SB` : 'SB');
   if (b.bb) bits.push(b.bb > 1 ? `${b.bb} BB` : 'BB');
   if (b.so) bits.push(b.so > 1 ? `${b.so} K` : 'K');
   return bits.join(', ');
@@ -36,6 +37,8 @@ export class Hud {
     this.cache = {};
     this.logIndex = 0;
     this.lastMessage = '';
+    this.bannerT = 0;
+    $('banner').classList.add('hidden');
     $('pbp-list').innerHTML = '';
     const [a, h] = game.sides;
     document.querySelector('#sb-away .chip').style.background = a.team.primary;
@@ -156,7 +159,7 @@ export class Hud {
       const m = e.text.match(/^(.*?)(\s\((EV [^)]*)\))?$/);
       const main = m ? m[1] : e.text;
       const meta = m && m[3] ? `<div class="meta">${esc(m[3])}</div>` : '';
-      const scoring = ['hr', 'hit', 'out', 'reach', 'bb', 'hbp', 'k'].includes(e.kind);
+      const scoring = ['hr', 'hit', 'out', 'reach', 'bb', 'hbp', 'k', 'steal'].includes(e.kind);
       const sc = scoring ? `<span class="sc">${game.sides[0].team.abbr} ${e.score[0]}–${e.score[1]} ${game.sides[1].team.abbr}</span>` : '';
       li.innerHTML = `${sc}${esc(main)}${meta}`;
       list.prepend(li);
@@ -201,7 +204,7 @@ export function renderBoxScore(game) {
       const arr = xb.filter(([, b]) => b[k] > 0).map(([p, b]) => `${esc(p.name.split(' ').slice(-1)[0])}${b[k] > 1 ? ` ${b[k]}` : ''}`);
       return arr.length ? `<div class="fine"><b>${label}:</b> ${arr.join(', ')}</div>` : '';
     };
-    h += list('d', '2B') + list('t', '3B') + list('hr', 'HR');
+    h += list('d', '2B') + list('t', '3B') + list('hr', 'HR') + list('sb', 'SB') + list('cs', 'CS') + list('sh', 'SAC') + list('sf', 'SF');
     h += `<div class="fine"><b>LOB:</b> ${s.lob[t]}</div>`;
     h += '</div>';
   }

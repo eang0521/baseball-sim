@@ -170,13 +170,15 @@ export class Stage {
       place(fig, f, f.pos === 'C' ? 'catcher' : 'fielder', hand, anim, t, sp);
       if (f.pos === 'C' && game.play) fig.mask.visible = false;
     }
-    const showBatter = w.batter && !game.play && game.phase !== 'afterPlay' && game.phase !== 'sideChange' && !game.over;
+    const stealPlay = game.play && game.play.steal;
+    const showBatter = w.batter && (!game.play || stealPlay) && !(game.phase === 'afterPlay' && !stealPlay) &&
+      game.phase !== 'sideChange' && !game.over;
     if (showBatter) {
       const b = w.batter;
       const fig = offPool[oi++];
       fig.setLook({ skin: randomSkin(hash(b.player.id || b.player.name)) });
       const e = { x: b.x, y: b.y, facing: b.side === 'R' ? Math.PI / 2 : -Math.PI / 2 };
-      place(fig, e, 'batter', b.side, b.anim === 'swing' ? 'swing' : 'stance', b.animT, 0);
+      place(fig, e, 'batter', b.side, b.anim === 'swing' || b.anim === 'bunt' ? b.anim : 'stance', b.animT, 0);
     }
     for (const r of w.runners || []) {
       if (r.out && (r.outT || 0) > 1.2) continue;
@@ -185,7 +187,7 @@ export class Stage {
       if (!fig) break;
       fig.setLook({ skin: randomSkin(hash(r.player.id || r.player.name)) });
       const sp = r.v || 0;
-      const anim = r.anim === 'lead' ? 'lead' : sp > 0.4 ? 'run' : 'idle';
+      const anim = sp > 0.4 ? 'run' : r.anim === 'lead' ? 'lead' : 'idle';
       place(fig, r, 'runner', 'R', anim, 0, sp);
     }
     for (; di < defPool.length; di++) defPool[di].root.visible = false;

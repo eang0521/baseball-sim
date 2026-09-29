@@ -121,9 +121,9 @@ export const DEFAULT_SPOTS = {
   '2B': { x: 9.8, y: 42.0 },
   SS: { x: -9.8, y: 42.5 },
   '3B': { x: -20.0, y: 26.0 },
-  LF: { x: -34, y: 84 },
-  CF: { x: 0, y: 97 },
-  RF: { x: 34, y: 84 },
+  LF: { x: -36, y: 88 },
+  CF: { x: 0, y: 101 },
+  RF: { x: 36, y: 88 },
 };
 
 export function describeDirection(x, y) {

@@ -2,13 +2,14 @@
 import { RNG } from './rng.js';
 import {
   BASES, BASE_DIST, DEFAULT_SPOTS, POSITIONS, ZONE_PLANE_Y, CATCHER_Y, RUBBER,
-  describeDirection, FT, POS_NUM,
+  describeDirection, FT, POS_NUM, pathPoint,
 } from './field.js';
 import { makeBall, stepBall } from './physics.js';
 import {
   planPitch, swingDecision, resolveSwing, battedBallVector, battedType, batSide,
-  ZONE, maxPitches, fatigueOf,
+  ZONE, maxPitches, fatigueOf, buntDecision, resolveBunt, zoneDistance,
 } from './atbat.js';
+import { runnerVmax, armSpeed, runTime, RUNNER_ACCEL } from './entities.js';
 import { Play } from './play.js';
 import { PITCH_TYPES } from './pitches.js';
 
@@ -17,13 +18,14 @@ const POS_NAME = { P: 'pitcher', C: 'catcher', '1B': 'first', '2B': 'second', '3
 const BASE_NAME = ['home', 'first', 'second', 'third', 'home'];
 const ORD = (n) => n + (['th', 'st', 'nd', 'rd'][(n % 100 - 20) % 10] || ['th', 'st', 'nd', 'rd'][n % 100] || 'th');
 
+const STRETCH = 0.95; // time to release from the stretch (runners on)
 const PAUSE = {
   pregame: 2.0, preAB: 1.0, windup: 1.15, afterPitch: 0.9, afterFoul: 1.2,
   afterPlay: 2.0, sideChange: 3.0, pitchingChange: 2.5,
 };
 
 function emptyBat() {
-  return { pa: 0, ab: 0, r: 0, h: 0, d: 0, t: 0, hr: 0, rbi: 0, bb: 0, so: 0, hbp: 0, sf: 0 };
+  return { pa: 0, ab: 0, r: 0, h: 0, d: 0, t: 0, hr: 0, rbi: 0, bb: 0, so: 0, hbp: 0, sf: 0, sh: 0, sb: 0, cs: 0 };
 }
 function emptyPit() {
   return { outs: 0, bf: 0, h: 0, r: 0, er: 0, bb: 0, so: 0, hr: 0, pc: 0, strikes: 0 };
@@ -42,6 +44,7 @@ export class Game {
   constructor(away, home, opts = {}) {
     this.rng = new RNG(opts.seed ?? Math.floor(Math.random() * 2 ** 31));
     this.extraRunner = opts.extraRunner !== false;
+    this.stealRate = opts.stealRate ?? 0.12;
     this.instant = false;
     this.sides = [this.makeSide(away, opts.awayStarter), this.makeSide(home, opts.homeStarter)];
     this.state = {
@@ -146,7 +149,8 @@ export class Game {
       const a = BASES[k], b = BASES[(k + 1) % 4];
       const t = lead / BASE_DIST;
       this.world.runners.push({
-        player: p, x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t,
+        player: p, origin: k, s: k * BASE_DIST + lead, v: 0,
+        x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t,
         facing: Math.atan2(-(b.x - a.x), -(b.y - a.y)) + Math.PI, anim: 'lead', out: false, scored: false,
       });
     }
@@ -235,9 +239,11 @@ export class Game {
         this.phaseT -= dt;
         this.pitcherEntity().anim = 'windup';
         this.pitcherEntity().animT = PAUSE.windup - Math.max(0, this.phaseT);
+        this.stepStealers(dt);
         if (this.phaseT <= 0) this.releasePitch();
         break;
       case 'pitch':
+        this.stepStealers(dt);
         this.stepPitch(dt);
         break;
       case 'play':
@@ -371,16 +377,24 @@ export class Game {
     const lead = def === this.sides[1] ? s.score[1] - s.score[0] : s.score[0] - s.score[1];
     const available = def.team.pitchers.filter((q) => !def.used.includes(q));
     if (!available.length) return false;
+    const starter = def.used[0] === p;
+    const runs = def.runsThisOuting;
     let reason = null;
     if (pc >= mx) reason = 'tired';
-    else if (p.role === 'SP' && def.runsThisOuting >= 6) reason = 'shelled';
-    else if (p.role === 'SP' && def.runsThisOuting >= 4 && pc > mx * 0.7) reason = 'struggling';
-    else if (this.inningStart) {
-      if (p.role !== 'SP' && def.outsThisOuting >= 3 && p.role !== 'CL') reason = 'inning';
-      else if (p.role === 'SP' && s.inning >= 6 && pc > mx * 0.82) reason = 'tired';
+    else if (starter) {
+      // starters go as deep as their stamina allows unless they get knocked around
+      if (runs >= 6 || (runs >= 5 && pc > mx * 0.5) || (runs >= 4 && pc > mx * 0.75)) reason = 'chased';
+      else if (this.inningStart) {
+        if (pc > mx * 0.88) reason = 'tired';
+        else if (s.inning >= 9 && lead > 0 && lead <= 3 && pc > mx * 0.75 && available.some((q) => q.role === 'CL')) reason = 'closer';
+        else if (s.inning === 8 && lead >= 0 && lead <= 3 && pc > mx * 0.82 && available.some((q) => q.role === 'SU')) reason = 'setup';
+      }
+    } else if (this.inningStart) {
+      const longMan = p.role === 'SP';
+      if (!longMan && def.outsThisOuting >= 3 && p.role !== 'CL') reason = 'inning';
+      else if (longMan && pc > mx * 0.8) reason = 'tired';
       else if (s.inning >= 9 && lead > 0 && lead <= 3 && p.role !== 'CL' && available.some((q) => q.role === 'CL')) reason = 'closer';
-      else if (s.inning === 8 && lead >= 0 && lead <= 3 && p.role !== 'SU' && p.role !== 'CL' && available.some((q) => q.role === 'SU') && (p.role !== 'SP' || pc > mx * 0.6)) reason = 'setup';
-    } else if (p.role !== 'SP' && def.runsThisOuting >= 3 && pc > 12) reason = 'struggling';
+    } else if (runs >= 3 && pc > 12) reason = 'struggling';
     if (!reason) return false;
 
     const save = lead > 0 && lead <= 3;
@@ -410,6 +424,7 @@ export class Game {
 
   // ---------- pitches ----------
   startWindup() {
+    this.resetPositions();
     const pe = this.pitcherEntity();
     pe.anim = 'windup';
     pe.animT = 0;
@@ -417,7 +432,109 @@ export class Game {
     this.world.ball.visible = false;
     this.world.batter.anim = 'stance';
     this.world.batter.animT = 0;
-    this.wait('windup');
+    const s = this.state;
+    const runnersOn = s.bases[1] || s.bases[2] || s.bases[3];
+    this.stealers = this.decideSteal();
+    this.bunting = this.stealers ? null : buntDecision(this.rng, s, this.scoreDiff());
+    if (this.bunting === 'sac') this.buntDefense();
+    // the delivery is game time (runners move during it), so it is never skipped
+    this.phase = 'windup';
+    this.phaseT = runnersOn ? STRETCH + this.rng.gauss(0, 0.06) : PAUSE.windup;
+  }
+
+  // obvious bunt: corners creep in, second baseman cheats toward first, batter shows it early
+  buntDefense() {
+    for (const f of this.world.fielders) {
+      if (f.pos === '1B') { f.x = 14.5; f.y = 17; }
+      if (f.pos === '3B') { f.x = -15; f.y = 17; }
+      if (f.pos === '2B') { f.x = 16; f.y = 27; }
+      if (f.pos === 'SS') { f.x = -5; f.y = 40; }
+      f.home = { x: f.x, y: f.y };
+    }
+    this.world.batter.anim = 'bunt';
+  }
+
+  scoreDiff() {
+    const s = this.state;
+    return s.score[s.half] - s.score[1 - s.half];
+  }
+
+  // Offensive manager: send a runner? Returns stealing runners or null.
+  decideSteal() {
+    const s = this.state;
+    const b = s.bases;
+    const auto = s.outs === 2 && s.balls === 3 && s.strikes === 2;
+    const list = [];
+    if (auto) {
+      // two outs, full count: forced runners go on the pitch
+      if (b[1]) { list.push(1); if (b[2]) { list.push(2); if (b[3]) list.push(3); } }
+      return list.length ? this.makeStealers(list, true) : null;
+    }
+    let lead = 0;
+    if (b[2] && !b[3]) lead = 2;
+    else if (b[1] && !b[2]) lead = 1;
+    if (!lead) return null;
+    const diff = this.scoreDiff();
+    if (diff > 5 || (s.inning >= 7 && diff < -2) || diff < -4) return null;
+    if (s.balls === 3 && s.outs < 2) return null;
+    const runner = b[lead];
+    const def = this.defenseSide;
+    const catcher = def.defense.C;
+    const margin = this.stealMargin(runner, lead, def.pitcher, catcher);
+    const want = this.stealRate / (1 + Math.exp(-(margin + 0.05) / 0.06)) * (lead === 2 ? 0.45 : 1) * (s.outs === 2 && lead === 2 ? 0.3 : 1);
+    if (!this.rng.chance(want)) return null;
+    const bases = [lead];
+    if (lead === 2 && b[1]) bases.push(1); // double steal
+    return this.makeStealers(bases, false);
+  }
+
+  stealMargin(runner, from, pitcher, catcher) {
+    const lead = from === 1 ? 4.4 : 5.8;
+    const jump = 0.08 + (pitcher.throws === 'L' && from === 1 ? 0.14 : 0);
+    const tRun = jump + runTime(BASE_DIST - lead, runnerVmax(runner), RUNNER_ACCEL, 3.0);
+    const throwD = from === 1 ? 38.8 : 27.4;
+    const tDef = STRETCH + 0.42 + 0.78 - (catcher.arm ?? 50) * 0.0018 - (catcher.fielding ?? 50) * 0.0012 +
+      throwD / (armSpeed(catcher) * 0.9) + 0.12;
+    return tDef - tRun;
+  }
+
+  makeStealers(bases, auto) {
+    const s = this.state;
+    const lefty = this.defenseSide.pitcher.throws === 'L';
+    return bases.map((k) => {
+      const e = this.world.runners.find((r) => r.origin === k);
+      // a base stealer takes a bigger lead and goes on the pitcher's first move
+      const lead = auto ? (k === 1 ? 3.4 : k === 2 ? 4.6 : 2.6) : k === 1 ? 4.4 : 5.8;
+      return {
+        player: s.bases[k], origin: k, entity: e, s: k * BASE_DIST + lead, v: 0, t: 0, auto,
+        jump: auto ? 0.6 : 0.02 + (lefty && k === 1 ? 0.14 : 0) + this.rng.range(0, 0.12),
+      };
+    });
+  }
+
+  stepStealers(dt) {
+    if (!this.stealers) return;
+    for (const st of this.stealers) {
+      st.t += dt;
+      if (st.t < st.jump) continue;
+      if (st.v === 0) st.v = 3.0;
+      const vmax = runnerVmax(st.player);
+      st.v = Math.min(vmax, st.v + RUNNER_ACCEL * dt);
+      const goal = (st.origin + 1) * BASE_DIST;
+      st.s = Math.min(goal, st.s + st.v * dt);
+      const e = st.entity;
+      if (e) {
+        const p = pathPoint(st.s);
+        const q = pathPoint(Math.min(goal, st.s + 0.5));
+        e.x = p.x; e.y = p.y; e.s = st.s; e.v = st.v; e.anim = 'run';
+        if (q.x !== p.x || q.y !== p.y) e.facing = Math.atan2(q.x - p.x, q.y - p.y);
+      }
+    }
+  }
+
+  stealState() {
+    if (!this.stealers) return null;
+    return new Map(this.stealers.map((st) => [st.player, { s: st.s, v: st.v }]));
   }
 
   releasePitch() {
@@ -439,7 +556,15 @@ export class Game {
     pe.anim = 'follow';
     pe.animT = 0;
     this.pitchT = 0;
-    this.swing = swingDecision(this.rng, s.batter, pitch, { balls: s.balls, strikes: s.strikes });
+    if (this.bunting) {
+      // square around; pull the bat back on pitches well out of the zone
+      this.world.batter.anim = 'bunt';
+      this.world.batter.animT = 0;
+      const seen = zoneDistance(pitch.plate.x + this.rng.gauss(0, 0.05), pitch.plate.z + this.rng.gauss(0, 0.05));
+      this.swing = seen < 0.06 || (this.bunting === 'sac' && seen < 0.12 && this.rng.chance(0.5));
+    } else {
+      this.swing = swingDecision(this.rng, s.batter, pitch, { balls: s.balls, strikes: s.strikes });
+    }
     this.swingStarted = false;
     this.crossed = false;
     this.phase = 'pitch';
@@ -456,9 +581,12 @@ export class Game {
     const wb = this.world.batter;
     if (this.swing && !this.swingStarted && this.pitchT >= pitch.flightTime - 0.16) {
       this.swingStarted = true;
-      wb.anim = 'swing';
-      wb.animT = 0;
+      if (!this.bunting) {
+        wb.anim = 'swing';
+        wb.animT = 0;
+      }
     }
+    if (this.bunting && !this.swing && this.pitchT >= pitch.flightTime - 0.12) wb.anim = 'stance';
     stepBall(ball, dt, { walls: false });
 
     if (!this.crossed && ball.p.y <= ZONE_PLANE_Y) {
@@ -497,7 +625,9 @@ export class Game {
     if (this.swing) { m.swings++; if (inZone) m.zswing++; else m.oswing++; }
     if (this.swing) {
       const platoon = side === (s.pitcher.throws === 'R' ? 'R' : 'L');
-      const res = resolveSwing(this.rng, s.batter, s.pitcher, pitch, side, platoon);
+      const res = this.bunting
+        ? resolveBunt(this.rng, s.batter, pitch, side, this.bunting)
+        : resolveSwing(this.rng, s.batter, s.pitcher, pitch, side, platoon);
       if (!res.contact) {
         m.whiff++;
         entry.result = 'Swinging strike';
@@ -513,7 +643,14 @@ export class Game {
           this.pitchOutcome = 'foultipK';
           return;
         }
-        entry.result = 'Foul';
+        if (this.bunting && s.strikes === 2) {
+          // foul bunt with two strikes is a strikeout
+          entry.result = 'Foul bunt (strike three)';
+          this.pitchOutcome = 'foultipK';
+          return;
+        }
+        this.stealers = null;
+        entry.result = this.bunting ? 'Foul bunt' : 'Foul';
         this.pitchOutcome = 'foul';
         const side2 = res.foulBack ? this.rng.gauss(0, 14) : this.rng.gauss(0, 5);
         ball.v = { x: side2, y: -this.rng.range(12, 28), z: res.q > 0 ? this.rng.range(6, 22) : this.rng.range(-8, 2) };
@@ -528,7 +665,7 @@ export class Game {
       // Ball in play (or foul off the bat): launch it
       pl.strikes++;
       entry.result = 'In play';
-      const bb = { ...res, type: battedType(res.la) };
+      const bb = { ...res, type: battedType(res.la), bunt: !!this.bunting, buntKind: this.bunting };
       m.bip++; m.ev += res.ev; m[bb.type] = (m[bb.type] || 0) + 1;
       const { v, w } = battedBallVector(bb);
       ball.p = { x: ball.p.x, y: ZONE_PLANE_Y + 0.25, z: ball.p.z };
@@ -541,7 +678,8 @@ export class Game {
       this.world.ball.trail = [];
       this.batted = bb;
       this.world.batter.anim = 'run';
-      this.play = new Play(this, bb);
+      this.play = new Play(this, bb, { runnerState: this.stealState() });
+      this.stealers = null;
       this.phase = 'play';
       this.onEvent({ type: 'contact', bb });
       return;
@@ -572,14 +710,34 @@ export class Game {
     const o = this.pitchOutcome;
     if (o === 'ball') {
       s.balls++;
-      if (s.balls >= 4) return this.walk('BB');
+      if (s.balls >= 4) { this.stealers = null; return this.walk('BB'); }
     } else if (o === 'called' || o === 'swinging' || o === 'foultipK') {
       s.strikes++;
-      if (s.strikes >= 3) return this.strikeout(o === 'called' ? 'looking' : 'swinging');
+      if (s.strikes >= 3) {
+        this.strikeout(o === 'called' ? 'looking' : o === 'foultipK' && this.bunting ? 'bunt' : 'swinging');
+        if (this.stealers && s.outs < 3 && !this.stealers[0].auto) this.startStealPlay();
+        this.stealers = null;
+        return;
+      }
     } else if (o === 'hbp') {
+      this.stealers = null;
       return this.walk('HBP');
     }
+    if (this.stealers && !this.stealers[0].auto) {
+      this.startStealPlay();
+      return;
+    }
+    this.stealers = null;
     this.wait('afterPitch');
+  }
+
+  startStealPlay() {
+    const side = this.world.batter ? this.world.batter.side : 'R';
+    this.play = new Play(this, null, { steal: true, runnerState: this.stealState(), batterSide: side });
+    this.stealers = null;
+    this.phase = 'play';
+    this.world.ball.mode = 'play';
+    this.onEvent({ type: 'steal' });
   }
 
   // ---------- PA outcomes ----------
@@ -600,7 +758,8 @@ export class Game {
     const pl = this.pitLine();
     pl.so++; pl.bf++;
     this.addOut(1);
-    this.addLog(`${s.batter.name} ${how === 'looking' ? 'strikes out looking' : 'strikes out swinging'}.`, 'k');
+    const how2 = { looking: 'strikes out looking', bunt: 'strikes out on a foul bunt', swinging: 'strikes out swinging' }[how];
+    this.addLog(`${s.batter.name} ${how2}.`, 'k');
     this.message = how === 'looking' ? 'Strikeout (looking)' : 'Strikeout (swinging)';
     this.onEvent({ type: 'strikeout' });
     this.paOver = true;
@@ -688,6 +847,7 @@ export class Game {
       this.afterFoulReset = true;
       return;
     }
+    if (res.steal) return this.finishSteal(res);
     const batter = s.batter;
     const bl = this.batLine();
     const def = this.defenseSide;
@@ -706,8 +866,11 @@ export class Game {
     let hitBases = 0;
     if (!batterOut && !roe && !fc) hitBases = res.hr ? 4 : Math.min(res.batterBase, res.groundRule ? 2 : 4);
     const dp = outs >= 2 && res.outs.some((o) => o.runner.isBatter);
+    const advanced = res.runners.some((r) => !r.isBatter && !r.out && (r.scored || Math.round(r.s / BASE_DIST) > r.origin));
+    const sacBunt = bb.bunt && batterOut && outs === 1 && !res.flyCaught && advanced && s.outs + outs < 3;
 
-    if (!sacFly) bl.ab++; else bl.sf++;
+    if (sacBunt) bl.sh++;
+    else if (!sacFly) bl.ab++; else bl.sf++;
     if (hitBases > 0) {
       bl.h++;
       pl.h++;
@@ -726,9 +889,9 @@ export class Game {
     s.bases = res.bases;
 
     // description
-    const text = this.describe(batter, bb, res, { hitBases, roe, fc, dp, sacFly });
+    const text = this.describe(batter, bb, res, { hitBases, roe, fc, dp, sacFly, sacBunt });
     this.addLog(text, hitBases === 4 ? 'hr' : hitBases > 0 ? 'hit' : batterOut ? 'out' : 'reach');
-    this.message = this.shortResult(res, hitBases, { roe, fc, dp, sacFly });
+    this.message = this.shortResult(res, hitBases, { roe, fc, dp, sacFly, sacBunt });
     this.onEvent({ type: 'playResult', hitBases, res });
     this.paOver = true;
     this.offense.idx = (this.offense.idx + 1) % 9;
@@ -736,8 +899,49 @@ export class Game {
     this.wait('afterPlay', res.hr ? 1.5 : PAUSE.afterPlay);
   }
 
+  finishSteal(res) {
+    const s = this.state;
+    s.errors[1 - s.half] += res.errors.length;
+    // the strikeout may already have ended the PA; outs on the bases still count
+    this.addOut(res.outs.length);
+    for (const r of res.runs) this.scoreRun(r.runner.player, false);
+    s.bases = res.bases;
+    const bits = [];
+    const chain = res.chain.join('-');
+    let msg = '';
+    for (const r of res.runners) {
+      if (!r.stealing) {
+        if (r.scored) bits.push(`${r.player.name} scores on the throw.`);
+        continue;
+      }
+      const target = BASE_NAME[r.origin + 1];
+      const bl = this.batLine(r.player);
+      if (r.out) {
+        bl.cs++;
+        bits.push(`${r.player.name} is caught stealing ${target}, ${chain}.`);
+        msg = msg || 'Caught stealing';
+      } else {
+        bl.sb++;
+        const end = r.scored ? 4 : Math.round(r.s / BASE_DIST);
+        bits.push(`${r.player.name} steals ${target}${end > r.origin + 1 ? ` and takes ${BASE_NAME[end]} on the throw` : ''}.`);
+        msg = msg || 'Stolen base';
+      }
+    }
+    if (bits.length) this.addLog(bits.join(' '), 'steal');
+    this.message = msg;
+    this.onEvent({ type: 'stealResult', res });
+    if (this.checkWalkoff()) return;
+    if (this.paOver || s.outs >= 3) {
+      this.paOver = true;
+      this.wait('afterPlay', 1.6);
+    } else {
+      this.wait('afterPitch', 1.4);
+    }
+  }
+
   shortResult(res, hitBases, f) {
     if (hitBases === 4) return res.runs.length === 4 ? 'GRAND SLAM!' : 'HOME RUN!';
+    if (f.sacBunt) return 'Sacrifice bunt';
     if (hitBases === 3) return 'Triple';
     if (hitBases === 2) return res.groundRule ? 'Ground-rule double' : 'Double';
     if (hitBases === 1) return 'Single';
@@ -767,6 +971,12 @@ export class Game {
       const kind = runs === 4 ? 'grand slam' : runs === 1 ? 'solo home run' : `${runs}-run home run`;
       const where = res.hr ? describeDirection(Math.sin(bb.spray * Math.PI / 180), Math.cos(bb.spray * Math.PI / 180)) : dirTxt;
       t = res.hr ? `${n} hits a ${kind} to ${where === 'center' ? 'center field' : where === 'left' || where === 'right' ? where + ' field' : where}!` : `${n} circles the bases — an inside-the-park ${kind}!`;
+    } else if (bb.bunt && f.hitBases > 0) {
+      t = `${n} bunts for a ${['', 'single', 'double', 'triple'][f.hitBases]}${dirTxt ? ` toward ${dirTxt}` : ''}!`;
+    } else if (f.sacBunt) {
+      t = `${n} lays down a sacrifice bunt, ${chainTxt}.`;
+    } else if (bb.bunt && res.flyCaught) {
+      t = `${n} pops out to ${firstPos} on a bunt attempt.`;
     } else if (f.hitBases > 0) {
       const verb = ['', 'singles', 'doubles', 'triples'][f.hitBases];
       t = res.groundRule ? `${n} hits a ground-rule double to ${dirTxt}.` : `${n} ${verb} on a ${typeWord} to ${dirTxt}.`;
@@ -795,7 +1005,14 @@ export class Game {
       extras.push(`${o.runner.player.name} out at ${BASE_NAME[o.base] || 'the base'}.`);
     }
     if (f.hitBases !== 4) for (const r of res.runs) extras.push(`${r.runner.player.name} scores.`);
-    return `${t}${extras.length ? ' ' + extras.join(' ') : ''} (${stat})`;
+    if (f.hitBases !== 4) {
+      for (const r of res.runners) {
+        if (r.isBatter || r.out || r.scored) continue;
+        const end = Math.round(r.s / BASE_DIST);
+        if (end > r.origin) extras.push(`${r.player.name} to ${BASE_NAME[end]}.`);
+      }
+    }
+    return `${t}${extras.length ? ' ' + extras.join(' ') : ''} (${bb.bunt ? 'bunt' : stat})`;
   }
 }
 

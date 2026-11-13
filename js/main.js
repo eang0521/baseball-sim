@@ -6,7 +6,7 @@ import { Hud, renderBoxScore } from './ui/hud.js';
 import { Editor } from './ui/editor.js';
 import { Sound } from './ui/sound.js';
 import { SeasonView } from './ui/seasonview.js';
-import { summarize } from './season/season.js';
+import { summarize, PO_BASE } from './season/season.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -101,7 +101,7 @@ $('btn-edit').addEventListener('click', () => editor.open(teams, league));
 const seasonView = new SeasonView({
   getLeague: () => league,
   onWatch: (season, g) => {
-    startGame(season.teams[g.a], season.teams[g.h], g.aSP, g.hSP, true, g.id);
+    startGame(season.teams[g.a], season.teams[g.h], g.aSP, g.hSP, g.id < PO_BASE, g.id);
     sound.unlock();
   },
 });

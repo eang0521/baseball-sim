@@ -120,6 +120,8 @@ export function gameSeed(season, g) {
 export function simGame(season, g) {
   const game = new Game(season.teams[g.a], season.teams[g.h], {
     awayStarter: g.aSP, homeStarter: g.hSP, seed: gameSeed(season, g),
+    // like MLB, no automatic runner on second in postseason extra innings
+    extraRunner: g.id < PO_BASE,
   });
   game.simToEnd();
   return summarize(game, g.id);
@@ -157,39 +159,241 @@ function decisions(game) {
 const BAT_KEYS = ['pa', 'ab', 'r', 'h', 'd', 't', 'hr', 'rbi', 'bb', 'so', 'hbp', 'sf', 'sh', 'sb', 'cs'];
 const PIT_KEYS = ['outs', 'bf', 'h', 'r', 'er', 'bb', 'so', 'hr', 'pc'];
 
+// Record any finished game: regular season or postseason.
 export function recordResult(season, res) {
+  if (res.id >= PO_BASE) return recordPlayoffResult(season, res);
   const g = gameAt(season, res.id);
   if (!g || g.score) return;
   g.score = res.score;
   if (res.innings !== 9) g.inn = res.innings;
+  addStats(season.bat, season.pit, g, res);
+}
+
+function addStats(bat, pit, g, res) {
   res.sides.forEach((sd, k) => {
     const team = k === 0 ? g.a : g.h;
     for (const [pid, b] of sd.bat) {
       if (!b.pa && !b.sb && !b.cs && !b.r) continue;
-      const t = (season.bat[pid] ||= { team, g: 0 });
+      const t = (bat[pid] ||= { team, g: 0 });
       t.team = team;
       t.g++;
       for (const key of BAT_KEYS) t[key] = (t[key] || 0) + (b[key] || 0);
     }
     sd.pit.forEach(([pid, l], i) => {
-      const t = (season.pit[pid] ||= { team, g: 0, gs: 0, w: 0, l: 0, sv: 0 });
+      const t = (pit[pid] ||= { team, g: 0, gs: 0, w: 0, l: 0, sv: 0 });
       t.team = team;
       t.g++;
       if (i === 0) t.gs++;
       for (const key of PIT_KEYS) t[key] = (t[key] || 0) + (l[key] || 0);
     });
   });
-  if (season.pit[res.wp]) season.pit[res.wp].w++;
-  if (season.pit[res.lp]) season.pit[res.lp].l++;
-  if (res.sv && season.pit[res.sv]) season.pit[res.sv].sv++;
+  if (pit[res.wp]) pit[res.wp].w++;
+  if (pit[res.lp]) pit[res.lp].l++;
+  if (res.sv && pit[res.sv]) pit[res.sv].sv++;
 }
 
-// Move to the next day once every game today has a result.
+// Move to the next day once every game today has a result; when the regular season ends,
+// the postseason field is set.
 export function advanceIfDone(season) {
   while (!isOver(season) && season.days[season.day].every((g) => g.score)) {
     season.day++;
     prepareDay(season);
   }
+  if (isOver(season) && !season.playoffs) startPlayoffs(season);
+}
+
+// ---------- postseason ----------
+// MLB format (2022 on), used whenever the league has two leagues split into divisions:
+// six clubs per league (three division winners seeded 1-3 by record, three wild cards 4-6).
+// Seeds 1 and 2 get byes. Wild Card Series, best of 3, all at the higher seed: 3 v 6, 4 v 5.
+// Division Series, best of 5 (2-2-1): 1 v the 4/5 winner, 2 v the 3/6 winner. League
+// Championship Series and World Series, best of 7 (2-3-2); the World Series host is the club
+// with the better regular-season record. Other leagues get a simpler top-four bracket.
+export const PO_BASE = 100000;
+
+const PATTERN = {
+  3: [1, 1, 1],
+  5: [1, 1, 0, 0, 1],
+  7: [1, 1, 0, 0, 0, 1, 1],
+};
+
+export function startPlayoffs(season) {
+  const rows = standings(season);
+  const h2h = headToHead(season);
+  // record, then head-to-head, then run differential, then a coin flip (seeded)
+  const rng = new RNG(season.seed + 17);
+  const tie = new Map(rows.map((r) => [r.i, rng.next()]));
+  const cmp = (a, b) => b.pct - a.pct || (h2h(b.i, a.i) - h2h(a.i, b.i)) || ((b.rs - b.ra) - (a.rs - a.ra)) || tie.get(a.i) - tie.get(b.i);
+  const leagues = [...new Set(season.teams.map((t) => t.league).filter(Boolean))];
+  const mlb = leagues.length === 2 && season.teams.every((t) => t.league && t.division) &&
+    leagues.every((l) => rows.filter((r) => r.team.league === l).length >= 6);
+  const po = { format: mlb ? 'mlb' : 'simple', rounds: [], seeds: {}, day: 0, nextId: PO_BASE, prot: {}, champion: null, bat: {}, pit: {} };
+  const mk = (best, hi, lo, hiSeed, loSeed, league) => ({ best, hi, lo, hiSeed, loSeed, league, wins: [0, 0], games: [], winner: null });
+
+  if (mlb) {
+    const byLeague = {};
+    for (const lg of leagues.sort()) {
+      const lr = rows.filter((r) => r.team.league === lg);
+      const divs = [...new Set(lr.map((r) => r.team.division))];
+      const winners = divs.map((d) => lr.filter((r) => r.team.division === d).sort(cmp)[0]).sort(cmp);
+      const wild = lr.filter((r) => !winners.includes(r)).sort(cmp).slice(0, 3);
+      const seeds = [...winners, ...wild].map((r) => r.i);
+      po.seeds[lg] = seeds;
+      byLeague[lg] = seeds;
+    }
+    const short = (lg) => (/American/.test(lg) ? 'AL' : /National/.test(lg) ? 'NL' : lg);
+    const wc = [], ds = [], lcs = [];
+    for (const lg of Object.keys(byLeague)) {
+      const s = byLeague[lg];
+      wc.push(mk(3, s[2], s[5], 3, 6, lg), mk(3, s[3], s[4], 4, 5, lg));
+      ds.push(mk(5, s[0], null, 1, null, lg), mk(5, s[1], null, 2, null, lg));
+      lcs.push(mk(7, null, null, null, null, lg));
+    }
+    // where each winner goes: [round, series, slot] (slot 'lo' = lower seed side)
+    wc.forEach((sr, k) => { sr.to = [1, k % 2 === 0 ? Math.floor(k / 2) * 2 + 1 : Math.floor(k / 2) * 2, 'lo']; });
+    ds.forEach((sr, k) => { sr.to = [2, Math.floor(k / 2), null]; });
+    lcs.forEach((sr, k) => { sr.to = [3, 0, null]; });
+    po.rounds = [
+      { name: 'Wild Card Series', short: 'WC', series: wc },
+      { name: 'Division Series', short: 'DS', series: ds },
+      { name: 'League Championship Series', short: 'CS', series: lcs },
+      { name: 'World Series', short: 'WS', series: [mk(7, null, null, null, null, 'World Series')] },
+    ];
+    for (const sr of lcs) sr.label = `${short(sr.league)}CS`;
+    for (const sr of ds) sr.label = `${short(sr.league)}DS`;
+    for (const sr of wc) sr.label = `${short(sr.league)} Wild Card`;
+    po.rounds[3].series[0].label = 'World Series';
+  } else {
+    const order = [...rows].sort(cmp).map((r) => r.i);
+    po.seeds.League = order.slice(0, Math.min(4, order.length));
+    if (order.length >= 4) {
+      const semis = [mk(7, order[0], order[3], 1, 4, 'League'), mk(7, order[1], order[2], 2, 3, 'League')];
+      semis.forEach((sr, k) => { sr.to = [1, 0, null]; sr.label = 'Semifinal'; });
+      po.rounds = [
+        { name: 'Semifinals', short: 'SF', series: semis },
+        { name: 'Championship Series', short: 'F', series: [{ ...mk(7, null, null, null, null, 'League'), label: 'Championship' }] },
+      ];
+    } else {
+      po.rounds = [{ name: 'Championship Series', short: 'F', series: [{ ...mk(7, order[0], order[1], 1, 2, 'League'), label: 'Championship' }] }];
+    }
+  }
+  // rotations reset for October: aces first
+  season.playoffs = po;
+  return po;
+}
+
+function headToHead(season) {
+  const w = new Map();
+  for (const day of season.days) for (const g of day) {
+    if (!g.score) continue;
+    const win = g.score[1] > g.score[0] ? g.h : g.a, loss = win === g.h ? g.a : g.h;
+    const k = `${win}-${loss}`;
+    w.set(k, (w.get(k) || 0) + 1);
+  }
+  return (a, b) => w.get(`${a}-${b}`) || 0;
+}
+
+const needed = (sr) => Math.floor(sr.best / 2) + 1;
+
+// The round being played: the first with an undecided series.
+export function activeRound(season) {
+  const po = season.playoffs;
+  if (!po) return -1;
+  return po.rounds.findIndex((r) => r.series.some((s) => s.winner == null));
+}
+
+// Today's postseason games (created on demand): the next game of every live series in the
+// active round. Empty once there's a champion.
+export function playoffToday(season) {
+  const po = season.playoffs;
+  const r = activeRound(season);
+  if (!po || r < 0) return [];
+  const out = [];
+  for (const sr of po.rounds[r].series) {
+    if (sr.winner != null || sr.hi == null || sr.lo == null) continue;
+    let g = sr.games[sr.games.length - 1];
+    if (!g || g.score) {
+      const n = sr.games.length;
+      const hiHome = PATTERN[sr.best][n] === 1;
+      g = { id: po.nextId++, a: hiHome ? sr.lo : sr.hi, h: hiHome ? sr.hi : sr.lo, n: n + 1 };
+      g.aSP = playoffStarter(season, g.a);
+      g.hSP = playoffStarter(season, g.h);
+      sr.games.push(g);
+    }
+    out.push(g);
+  }
+  return out;
+}
+
+// Four-man playoff rotation in rotation order.
+function playoffStarter(season, t) {
+  const po = season.playoffs;
+  const sps = season.teams[t].pitchers.filter((p) => p.role === 'SP').slice(0, 4);
+  const pool = sps.length ? sps : season.teams[t].pitchers;
+  const k = po.prot[t] || 0;
+  po.prot[t] = k + 1;
+  return pool[k % pool.length].id;
+}
+
+export function findSeries(season, id) {
+  for (const [ri, round] of (season.playoffs?.rounds || []).entries()) {
+    for (const sr of round.series) {
+      const g = sr.games.find((x) => x.id === id);
+      if (g) return { ri, sr, g };
+    }
+  }
+  return null;
+}
+
+function recordPlayoffResult(season, res) {
+  const po = season.playoffs;
+  const f = findSeries(season, res.id);
+  if (!f || f.g.score) return;
+  const { sr, g } = f;
+  g.score = res.score;
+  if (res.innings !== 9) g.inn = res.innings;
+  addStats(po.bat, po.pit, g, res);
+  const winner = res.score[1] > res.score[0] ? g.h : g.a;
+  sr.wins[winner === sr.hi ? 0 : 1]++;
+  if (sr.wins[0] >= needed(sr) || sr.wins[1] >= needed(sr)) {
+    sr.winner = sr.wins[0] > sr.wins[1] ? sr.hi : sr.lo;
+    advanceWinner(season, sr);
+  }
+}
+
+function advanceWinner(season, sr) {
+  const po = season.playoffs;
+  if (!sr.to) { po.champion = sr.winner; return; }
+  const [ri, si, slot] = sr.to;
+  const next = po.rounds[ri].series[si];
+  const seedOf = (t) => {
+    for (const s of Object.values(po.seeds)) { const k = s.indexOf(t); if (k >= 0) return k + 1; }
+    return 99;
+  };
+  if (slot === 'lo') { next.lo = sr.winner; next.loSeed = seedOf(sr.winner); return; }
+  // fill an open side, then make the better seed (or, across leagues, the better record) the host
+  if (next.hi == null) next.hi = sr.winner; else next.lo = sr.winner;
+  if (next.hi != null && next.lo != null) {
+    const rec = standings(season);
+    const better = next.league === 'World Series'
+      ? (rec[next.hi].pct !== rec[next.lo].pct ? rec[next.hi].pct > rec[next.lo].pct : (rec[next.hi].rs - rec[next.hi].ra) >= (rec[next.lo].rs - rec[next.lo].ra))
+      : seedOf(next.hi) <= seedOf(next.lo);
+    if (!better) [next.hi, next.lo] = [next.lo, next.hi];
+    next.hiSeed = seedOf(next.hi);
+    next.loSeed = seedOf(next.lo);
+  }
+}
+
+export const seasonDone = (season) => isOver(season) && season.playoffs && season.playoffs.champion != null;
+
+// One status line per series: "NYY lead 2-1", "SEA win 3-1", "Game 1 today".
+export function seriesStatus(season, sr) {
+  const ab = (t) => season.teams[t]?.abbr;
+  if (sr.hi == null || sr.lo == null) return 'Waiting';
+  const [a, b] = sr.wins;
+  if (sr.winner != null) return `${ab(sr.winner)} win ${Math.max(a, b)}-${Math.min(a, b)}`;
+  if (a === b) return a === 0 ? 'Not started' : `Tied ${a}-${b}`;
+  return `${ab(a > b ? sr.hi : sr.lo)} lead ${Math.max(a, b)}-${Math.min(a, b)}`;
 }
 
 // ---------- standings ----------

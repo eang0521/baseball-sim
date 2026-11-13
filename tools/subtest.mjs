@@ -9,7 +9,7 @@ const teams = process.argv[3] === 'custom' ? defaultTeams().map(normalizeTeam)
   : JSON.parse(readFileSync(new URL('../js/data/mlb/2026.json', import.meta.url))).teams.map(normalizeTeam);
 const tally = { PH: 0, PR: 0, DEF: 0 };
 const tot = { pa: 0, ab: 0, h: 0, hr: 0, bb: 0, so: 0, r: 0 };
-let shown = 0, shownBad = 0, pas = 0, pitches = 0;
+let shown = 0, shownBad = 0, pas = 0, pitches = 0, stealsShown = 0, stealPlays = 0;
 const sample = [];
 for (let i = 0; i < N; i++) {
   const a = teams[(i * 7) % teams.length], h = teams[(i * 7 + 3) % teams.length];
@@ -24,6 +24,7 @@ for (let i = 0; i < N; i++) {
       for (const e of g.events) {
         if (e.type === 'pitch') shownThisPA++;
         if (e.type === 'substitution') tally[e.how]++;
+        if (e.type === 'stealResult') stealsShown++;
       }
       g.events.length = 0;
       if (g.paSeq !== prevSeq) {
@@ -37,6 +38,7 @@ for (let i = 0; i < N; i++) {
     g.simToEnd();
   }
   for (const sd of g.sides) {
+    if (last) for (const b of sd.bat.values()) stealPlays += b.sb + b.cs;
     for (const b of sd.bat.values()) for (const k in tot) tot[k] += b[k];
     for (const p of sd.pit.values()) pitches += p.pc;
   }
@@ -45,5 +47,6 @@ for (let i = 0; i < N; i++) {
 const tg = N * 2;
 console.log(`${N} games. Per team-game: PH ${(tally.PH / tg).toFixed(2)}  PR ${(tally.PR / tg).toFixed(2)}  DEF ${(tally.DEF / tg).toFixed(2)}`);
 console.log(`R/G ${(tot.r / tg).toFixed(2)}  AVG ${(tot.h / tot.ab).toFixed(3)}  K% ${(100 * tot.so / tot.pa).toFixed(1)}  BB% ${(100 * tot.bb / tot.pa).toFixed(1)}  HR% ${(100 * tot.hr / tot.pa).toFixed(2)}  P/PA ${(pitches / tot.pa).toFixed(2)}`);
-console.log(`last-pitch games: ${pas} PAs watched, ${(shown / pas).toFixed(2)} pitches shown per PA, ${shownBad} PAs showed more than one pitch`);
+console.log(`last-pitch games: ${pas} PAs watched, ${(shown / pas).toFixed(2)} pitches shown per PA, ${shownBad} PAs showed more than one pitch (steals or fouls)`);
+console.log(`steal plays shown in last-pitch games: ${stealsShown} of ${stealPlays} stolen-base attempts (SB+CS; double steals count twice)`);
 console.log('sample subs:\n' + sample.slice(0, 14).join('\n'));

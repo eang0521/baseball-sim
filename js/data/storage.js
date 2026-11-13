@@ -61,6 +61,32 @@ export async function resetTeams(league = 'custom') {
   return freshTeams(league);
 }
 
+// ---------- season ----------
+const SEASON = 'bbsim.season.v1';
+
+export function loadSeason() {
+  try {
+    const s = JSON.parse(localStorage.getItem(SEASON));
+    return s && s.version === 1 && Array.isArray(s.days) ? s : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+export function saveSeason(season) {
+  try {
+    localStorage.setItem(SEASON, JSON.stringify(season));
+    return true;
+  } catch (e) {
+    console.warn('Could not save season', e);
+    return false;
+  }
+}
+
+export function clearSeason() {
+  try { localStorage.removeItem(SEASON); } catch (e) { /* ignore */ }
+}
+
 export function loadPrefs() {
   try {
     return JSON.parse(localStorage.getItem(PREFS)) || {};

@@ -19,7 +19,16 @@ In headless testing, the simulation lands close to real MLB league rates: about 
 
 ## Last-pitch mode
 
-Tick **Watch only the last pitch of each at-bat** on the start screen (or pick *Last pitch only* in the control bar) to see only the pitch that decides each plate appearance: ball four, strike three, a hit batter or the swing that puts the ball in play. The other pitches are simmed instantly. The sim decides each pitch's outcome at the start of the windup, so it knows in advance which pitch to show. **Hide the count** blanks the balls and strikes, the pitcher's pitch count and the earlier pitches on the strike-zone plot, so you can't tell from the screen whether a walk or a strikeout is coming.
+Tick **Watch only the last pitch of each at-bat** on the start screen (or pick *Last pitch only* in the control bar) to see only the pitch that decides each plate appearance: ball four, strike three, a hit batter or the swing that puts the ball in play. The other pitches are simmed instantly. The sim decides each pitch's outcome at the start of the windup, so it knows in advance which pitch to show. **Hide the count** blanks the balls and strikes, the pitcher's pitch count and the earlier pitches on the strike-zone plot, so you can't tell from the screen whether a walk or a strikeout is coming. Stolen-base attempts are shown as well, even when the pitch doesn't end the at-bat.
+
+## Season mode
+
+Click **Season mode** on the start screen. Pick a league (fictional or MLB), a length (162, 81, 40 or 15 games) and, if you like, a team to follow. Every club plays every day in three-game series with home and road split evenly, and starters follow each club's rotation.
+
+- **Watch** any of today's games in 3D. The rest of that day's games sim in the background while you watch.
+- **Sim day / week / month / to end** runs games in parallel Web Workers. A full 162-game MLB season (2,430 games) takes several minutes on a typical 8-core machine.
+- **Standings** by division (MLB) or as one table, with games behind, run differential, last 10 and streak. **Schedule** shows any day's results and probable pitchers. **Leaders** covers AVG, HR, RBI, OPS, SB, H, ERA, W, SO, SV, WHIP and IP. **Team stats** shows season lines for any club.
+- The season, including a roster snapshot taken when it starts, is saved in your browser. Wins, losses and saves use simplified scoring rules.
 
 ## Controls
 
@@ -79,8 +88,10 @@ js/sim/      simulation engine (no DOM, runs in Node too)
   atbat.js     pitch selection, swing decisions, contact model
   play.js      live-ball fielding and baserunning
   game.js      innings, plate appearances, bullpen, stats, play-by-play
+  coach.js     pinch hitters, pinch runners, defensive replacements
+js/season/   schedule, standings, leaders; worker pool for background sims
 js/render/   Three.js ballpark, player figures, broadcast camera
-js/ui/       HUD, box score, roster editor, sound
+js/ui/       HUD, box score, roster editor, season screen, sound
 js/data/     default teams and storage; mlb/ holds imported MLB rosters
 tools/       headless test scripts; tools/mlb/ builds the MLB rosters
 ```

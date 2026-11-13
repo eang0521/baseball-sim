@@ -37,7 +37,19 @@ export function sprayAngleDeg(x, y) {
   return (Math.atan2(x, y) * 180) / Math.PI;
 }
 
+// Hot path (called every physics step): tabulate the wall at 0.05° and interpolate.
+const FENCE_STEP = 0.05;
+const FENCE_LUT = new Float64Array(Math.round(90 / FENCE_STEP) + 1);
+for (let i = 0; i < FENCE_LUT.length; i++) FENCE_LUT[i] = fenceDistanceExact(-45 + i * FENCE_STEP);
+
 export function fenceDistance(angleDeg) {
+  const u = (Math.max(-45, Math.min(45, angleDeg)) + 45) / FENCE_STEP;
+  const i = Math.min(FENCE_LUT.length - 2, Math.floor(u));
+  const t = u - i;
+  return FENCE_LUT[i] + (FENCE_LUT[i + 1] - FENCE_LUT[i]) * t;
+}
+
+function fenceDistanceExact(angleDeg) {
   const a = Math.max(-45, Math.min(45, angleDeg));
   for (let i = 0; i < FENCE_PTS.length - 1; i++) {
     const [a0, d0] = FENCE_PTS[i];

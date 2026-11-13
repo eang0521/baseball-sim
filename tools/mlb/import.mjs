@@ -470,7 +470,9 @@ async function main() {
       ...cl.map((s) => makePitcher(s.player.id, 'CL')),
     ];
     const [primary, secondary] = COLORS[abbr] || ['#1d4ed8', '#f8fafc'];
-    teams.push({ id: `mlb-${abbr.toLowerCase()}`, name: t.name, abbr, primary, secondary, league: t.league?.name, lineup, bench, pitchers });
+    // "American League West" -> "AL West"
+    const division = (t.division?.name || '').replace(/^American League/, 'AL').replace(/^National League/, 'NL') || undefined;
+    teams.push({ id: `mlb-${abbr.toLowerCase()}`, name: t.name, abbr, primary, secondary, league: t.league?.name, division, lineup, bench, pitchers });
     console.log(`${abbr.padEnd(4)} ${lineup.map((h) => `${h.pos}:${h.name.split(' ').slice(-1)[0]}`).join(' ')} | bench ${bench.map((h) => `${h.pos}:${h.name.split(' ').slice(-1)[0]}`).join(' ')}`);
   }
 

@@ -5,6 +5,8 @@ import { Stage } from './render/stage.js';
 import { Hud, renderBoxScore } from './ui/hud.js';
 import { Editor } from './ui/editor.js';
 import { Sound } from './ui/sound.js';
+import { SeasonView } from './ui/seasonview.js';
+import { summarize } from './season/season.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -95,6 +97,16 @@ $('away-team').addEventListener('change', () => fillPitchers('away'));
 $('home-team').addEventListener('change', () => fillPitchers('home'));
 $('btn-edit').addEventListener('click', () => editor.open(teams, league));
 
+// ---------- season mode ----------
+const seasonView = new SeasonView({
+  getLeague: () => league,
+  onWatch: (season, g) => {
+    startGame(season.teams[g.a], season.teams[g.h], g.aSP, g.hSP, true, g.id);
+    sound.unlock();
+  },
+});
+$('btn-season').addEventListener('click', () => seasonView.show());
+
 $('btn-start').addEventListener('click', () => {
   const a = +$('away-team').value, h = +$('home-team').value;
   if (a === h) {
@@ -107,8 +119,9 @@ $('btn-start').addEventListener('click', () => {
   sound.unlock();
 });
 
-function startGame(away, home, awaySP, homeSP, ghost) {
+function startGame(away, home, awaySP, homeSP, ghost, seasonGameId = null) {
   game = new Game(away, home, { awayStarter: awaySP, homeStarter: homeSP, extraRunner: ghost, lastPitchOnly: prefs.lastPitch });
+  game.seasonGameId = seasonGameId;
   stage.setTeams(game);
   hud.setGame(game);
   $('setup').classList.add('hidden');
@@ -207,6 +220,7 @@ function openBox() {
   if (!game) return;
   $('box-body').innerHTML = renderBoxScore(game);
   $('box-new').classList.toggle('hidden', !game.over);
+  $('box-new').textContent = game.seasonGameId != null ? 'Back to season' : 'New game';
   $('boxscore').classList.remove('hidden');
 }
 $('btn-box').addEventListener('click', openBox);
@@ -217,12 +231,14 @@ function newGame() {
   $('boxscore').classList.add('hidden');
   fillSetup();
   $('setup').classList.remove('hidden');
+  if (game && game.over && game.seasonGameId != null) seasonView.show();
 }
 $('btn-new').addEventListener('click', newGame);
 
 window.addEventListener('keydown', (e) => {
   if (e.target.matches('input, select, textarea')) return;
   if (!$('editor').classList.contains('hidden')) return;
+  if (seasonView.open && e.key !== 'Escape') return;
   if (e.code === 'Space') { e.preventDefault(); togglePause(); }
   else if (e.key === 'n' || e.key === 'N') $('btn-next').click();
   else if (e.key === 'w' || e.key === 'W') setWatch(!prefs.lastPitch);
@@ -251,6 +267,7 @@ function frame(now) {
     hud.update(game, dt);
     if (game.over && !finalShown) {
       finalShown = true;
+      if (game.seasonGameId != null) seasonView.recordWatched(summarize(game, game.seasonGameId));
       setTimeout(openBox, 2500);
     }
   } else {

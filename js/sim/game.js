@@ -514,7 +514,8 @@ export class Game {
     const call = this.judgePitch(pitch, swing, side, p);
     this.pending = { pitch, swing, call };
     this.showPitch = !this.lastPitchOnly || (this.endsPA(call.outcome) &&
-      !(call.outcome === 'inplay' && this.predictPlainFoul(call.res, pitch)));
+      !(call.outcome === 'inplay' && this.predictPlainFoul(call.res, pitch))) ||
+      this.stealOnPitch(call.outcome);
   }
 
   // Fly the batted ball with no fielders around: does it end up foul where nobody could catch it?
@@ -544,6 +545,13 @@ export class Game {
       best = Math.min(best, Math.hypot(sp.x - p.x, sp.y - p.y));
     }
     return best < Math.max(0, t - 0.5) * 7.8;
+  }
+
+  // A runner is going on this pitch and the catcher will get a throw off (a foul ball would
+  // send him back; ball four or contact are shown anyway). Last-pitch mode shows these too.
+  stealOnPitch(o) {
+    if (!this.stealers || this.stealers[0].auto) return false;
+    return o === 'called' || o === 'swinging' || o === 'foultipK' || (o === 'ball' && this.state.balls < 3);
   }
 
   judgePitch(pitch, swing, side, pitcher) {

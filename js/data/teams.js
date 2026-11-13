@@ -151,6 +151,7 @@ export function normalizeTeam(t) {
   team.primary = team.primary || '#1d4ed8';
   team.secondary = team.secondary || '#f8fafc';
   if (t.league) team.league = String(t.league);
+  if (t.division) team.division = String(t.division);
   const num = (v, d) => clamp(Number.isFinite(+v) ? +v : d, 1, 99);
   const hitter = (h) => ({
     id: h.id || newId('h'), name: String(h.name || 'Player'), num: h.num ?? 0, pos: FIELD_POS.includes(h.pos) ? h.pos : 'DH',

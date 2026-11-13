@@ -121,6 +121,7 @@
         <label class="check sub" id="opt-hide-wrap"><input type="checkbox" id="opt-hide"> Hide the count, so you can't tell what's coming</label>
         <div class="actions">
           <button id="btn-edit">Edit rosters</button>
+          <button id="btn-season">Season mode</button>
           <button id="btn-start" class="primary big">Play ball</button>
         </div>
         <p class="fine">Tip: Space pauses, N skips to the next batter, C cycles cameras. Drag in Free orbit to look around.</p>
@@ -133,6 +134,14 @@
         <header class="mhead"><h2>Box score</h2><button class="icon" data-close="boxscore" aria-label="Close">✕</button></header>
         <div id="box-body"></div>
         <div class="actions"><button id="box-new" class="primary hidden">New game</button><button data-close="boxscore">Close</button></div>
+      </div>
+    </div>
+
+    <!-- Season -->
+    <div class="modal hidden" id="season">
+      <div class="card wide season">
+        <header class="mhead"><h2 id="season-title">Season</h2><button class="icon" data-close="season" aria-label="Close">✕</button></header>
+        <div id="season-body"></div>
       </div>
     </div>
 

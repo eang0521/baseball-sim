@@ -34,7 +34,9 @@ export function choosePitch(rng, pitcher, count, lastType) {
   const ahead = strikes > balls;
   const behind = balls > strikes && balls >= 2;
   return rng.weighted(pitcher.pitches, (p, i) => {
-    let w = (FASTBALLS.has(p.type) ? 1.35 : 1.0) * (0.55 + p.rating / 100);
+    // Real pitchers carry their actual pitch mix (usage %); invented ones lean on the fastball.
+    const mix = p.usage != null ? p.usage / 30 : (FASTBALLS.has(p.type) ? 1.35 : 1.0);
+    let w = mix * (0.55 + p.rating / 100);
     if (behind && FASTBALLS.has(p.type)) w *= 2.0;
     if (ahead && !FASTBALLS.has(p.type)) w *= 1.6;
     if (strikes === 2 && (BREAKING.has(p.type) || OFFSPEED.has(p.type))) w *= 1.25;
@@ -109,6 +111,9 @@ export function planPitch(rng, pitcher, pc, count, batterSide, lastType) {
 }
 
 // Batter decides whether to swing, based on a noisy read of where the pitch will cross.
+export let EYE_PATIENCE = 0.0012;
+export function setEyePatience(v) { EYE_PATIENCE = v; }
+
 export function swingDecision(rng, batter, pitch, count) {
   const eye = batter.eye ?? 50;
   const stuff = (pitch.rating - 50) / 150;
@@ -125,6 +130,8 @@ export function swingDecision(rng, batter, pitch, count) {
   if (balls === 2 && strikes === 0) maxS = 0.8;
   // aggressive hitters (low eye, high power) chase a bit more
   c += ((batter.power ?? 50) - (eye)) * 0.0003;
+  // patient hitters (high eye) lay off borderline pitches, which is where walks come from
+  c -= (eye - 55) * EYE_PATIENCE;
   const p = maxS / (1 + Math.exp((d - c) / 0.05));
   return rng.chance(p);
 }
@@ -158,7 +165,12 @@ export function resolveSwing(rng, batter, pitcher, pitch, side, platoon) {
   const q = v / R;
   if (Math.abs(q) > 0.93) return { contact: true, foulTip: true, q };
   if (Math.abs(q) > 0.62) return { contact: true, foulBack: true, q, tErr };
-  const qn = q / 0.62;
+  // Putting the bat on the ball is contact skill; squaring it up also takes bat speed and strength.
+  // Rescale the same miss by a contact/power blend so slap hitters don't barrel everything and
+  // sluggers who swing through a lot still punish what they hit. Neutral at 55/55.
+  const qual = 0.5 * contact + 0.5 * power;
+  const qScale = (1.42 - qual / 100) / (1.42 - contact / 100);
+  const qn = Math.max(-1.3, Math.min(1.3, ((v - muV) * qScale + muV) / R / 0.62));
   const batSpeed = 71 + power * 0.155;
   const eMax = 0.2 * pitch.mph + 1.2 * batSpeed;
   const timingF = 1 - Math.min(0.45, (tErr / 0.03) ** 2 * 0.35);

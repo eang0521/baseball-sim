@@ -27,10 +27,12 @@ export class Editor {
     $('ed-import').addEventListener('change', (e) => this.importJSON(e));
     $('ed-reset').addEventListener('click', () => {
       if (!confirm('Reset all teams to the defaults? Your edits will be lost.')) return;
-      this.teams = resetTeams();
-      this.cur = 0;
-      this.render();
-      this.status('Teams reset to defaults.');
+      resetTeams(this.league).then((t) => {
+        this.teams = t;
+        this.cur = 0;
+        this.render();
+        this.status(this.league === 'custom' ? 'Teams reset to defaults.' : 'Rosters reloaded from the imported MLB data.');
+      }).catch((err) => this.status(err.message));
     });
     $('ed-save').addEventListener('click', () => this.save());
     $('ed-body').addEventListener('input', (e) => this.onInput(e));
@@ -38,7 +40,8 @@ export class Editor {
     $('ed-body').addEventListener('click', (e) => this.onClick(e));
   }
 
-  open(teams) {
+  open(teams, league = 'custom') {
+    this.league = league;
     this.teams = JSON.parse(JSON.stringify(teams));
     this.cur = Math.min(this.cur, this.teams.length - 1);
     this.render();
@@ -74,7 +77,7 @@ export class Editor {
     t.lineup.forEach((p, i) => {
       const ovr = Math.round((p.contact + p.power + p.eye + p.speed * 0.6 + p.fielding * 0.7 + p.arm * 0.5) / 4.8);
       h += `<tr data-h="${i}"><td class="ord">${i + 1}</td>
-        <td><input class="name" data-k="name" value="${esc(p.name)}" maxlength="32"></td>
+        <td><input class="name" data-k="name" value="${esc(p.name)}" maxlength="32"${p.real ? ` title="${esc(p.real)}"` : ''}></td>
         <td><select data-k="pos">${FIELD_POS.map((x) => `<option ${x === p.pos ? 'selected' : ''}>${x}</option>`).join('')}</select></td>
         <td><select data-k="bats">${['R', 'L', 'S'].map((x) => `<option ${x === p.bats ? 'selected' : ''}>${x}</option>`).join('')}</select></td>`;
       for (const [k] of HIT_KEYS) h += `<td><input class="num" type="number" min="1" max="99" data-k="${k}" value="${p[k]}"></td>`;
@@ -95,7 +98,7 @@ export class Editor {
     h += '<div class="ed-sec"><h3>Pitching staff</h3><div class="box-scroll"><table class="ed-table"><thead><tr><th>Name</th><th>Throws</th><th>Role</th><th>Velo</th><th>Ctrl</th><th>Stam</th><th>Pitches (type · rating)</th><th></th></tr></thead><tbody>';
     t.pitchers.forEach((p, i) => {
       h += `<tr data-p="${i}">
-        <td><input class="name" data-k="name" value="${esc(p.name)}" maxlength="32"></td>
+        <td><input class="name" data-k="name" value="${esc(p.name)}" maxlength="32"${p.real ? ` title="${esc(p.real)}"` : ''}></td>
         <td><select data-k="throws">${['R', 'L'].map((x) => `<option ${x === p.throws ? 'selected' : ''}>${x}</option>`).join('')}</select></td>
         <td><select data-k="role">${ROLES.map((x) => `<option ${x === p.role ? 'selected' : ''}>${x}</option>`).join('')}</select></td>
         <td><input class="num" type="number" min="70" max="105" data-k="velo" value="${p.velo}" title="Fastball velocity (mph)"></td>
@@ -109,7 +112,7 @@ export class Editor {
         <td style="white-space:nowrap"><button data-act="prand" title="Replace with a random pitcher">🎲</button><button data-act="pdel" title="Remove pitcher" ${t.pitchers.length <= 2 ? 'disabled' : ''}>✕</button></td></tr>`;
     });
     h += '</tbody></table></div>';
-    if (t.pitchers.length < 10) h += '<button data-act="padd" style="margin-top:6px">+ Add pitcher</button>';
+    if (t.pitchers.length < 16) h += '<button data-act="padd" style="margin-top:6px">+ Add pitcher</button>';
     h += '<p class="fine">Starters (SP) need high stamina; relievers (RP), setup men (SU) and closers (CL) pitch in shorter bursts. Stamina roughly equals the pitch count a pitcher can handle before tiring.</p></div>';
     $('ed-body').innerHTML = h;
   }
@@ -237,7 +240,7 @@ export class Editor {
 
   save() {
     this.teams = this.teams.map(normalizeTeam);
-    const ok = saveTeams(this.teams);
+    const ok = saveTeams(this.teams, this.league);
     this.onSave(this.teams);
     if (!ok) alert('Could not save to browser storage; changes apply to this session only.');
     this.close();

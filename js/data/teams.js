@@ -135,12 +135,14 @@ export function normalizeTeam(t) {
   team.abbr = String(team.abbr || team.name.slice(0, 3)).toUpperCase().slice(0, 4);
   team.primary = team.primary || '#1d4ed8';
   team.secondary = team.secondary || '#f8fafc';
+  if (t.league) team.league = String(t.league);
   const num = (v, d) => clamp(Number.isFinite(+v) ? +v : d, 1, 99);
   team.lineup = (team.lineup || []).slice(0, 9).map((h) => ({
     id: h.id || newId('h'), name: String(h.name || 'Player'), num: h.num ?? 0, pos: h.pos || 'DH',
     bats: ['R', 'L', 'S'].includes(h.bats) ? h.bats : 'R',
     contact: num(h.contact, 50), power: num(h.power, 50), eye: num(h.eye, 50),
     speed: num(h.speed, 50), fielding: num(h.fielding, 50), arm: num(h.arm, 50),
+    ...(h.real ? { real: String(h.real) } : {}),
   }));
   while (team.lineup.length < 9) {
     const have = new Set(team.lineup.map((h) => h.pos));
@@ -154,7 +156,8 @@ export function normalizeTeam(t) {
     velo: Math.max(70, Math.min(105, +p.velo || 92)),
     control: num(p.control, 50), stamina: num(p.stamina, 40),
     pitches: (p.pitches && p.pitches.length ? p.pitches : [{ type: 'FF', rating: 50 }])
-      .map((x) => ({ type: x.type, rating: num(x.rating, 50) })),
+      .map((x) => ({ type: x.type, rating: num(x.rating, 50), ...(Number.isFinite(+x.usage) && x.usage !== null ? { usage: Math.max(1, Math.min(100, +x.usage)) } : {}) })),
+    ...(p.real ? { real: String(p.real) } : {}),
   }));
   if (!team.pitchers.some((p) => p.role === 'SP')) team.pitchers.unshift(randomPitcher(rng, 'SP'));
   return team;

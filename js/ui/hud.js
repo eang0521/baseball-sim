@@ -91,14 +91,14 @@ export class Hud {
       const bl = game.batLine(b);
       const idx = game.offense.lineup.indexOf(b) + 1;
       const side = s.pitcher ? batSide(b, s.pitcher) : b.bats;
-      this.set('mu-batter', 'mub', `${b.id}`, (el) => { el.textContent = b.name; });
+      this.set('mu-batter', 'mub', `${b.id}`, (el) => { el.textContent = b.name; el.title = b.real ? `Real season: ${b.real}` : ''; });
       this.set('mu-batter-sub', 'mubs', `${b.id}|${bl.pa}|${bl.h}|${bl.rbi}|${s.pitcher?.id}`, (el) => {
         el.textContent = `${idx}. ${b.pos} · Bats ${b.bats === 'S' ? `S (${side})` : b.bats} · ${batToday(bl)}`;
       });
     }
     const p = def.pitcher;
     const pl = def.pit.get(p.id) || { outs: 0, r: 0, so: 0, pc: 0 };
-    this.set('mu-pitcher', 'mup', p.id, (el) => { el.textContent = p.name; });
+    this.set('mu-pitcher', 'mup', p.id, (el) => { el.textContent = p.name; el.title = p.real ? `Real season: ${p.real}` : ''; });
     this.set('mu-pitcher-sub', 'mups', `${p.id}|${pl.pc}|${pl.outs}|${pl.r}|${pl.so}`, (el) => {
       el.textContent = `${p.throws}HP ${p.role} · ${pl.pc} pitches · ${ip(pl.outs)} IP, ${pl.r} R, ${pl.so} K`;
     });

@@ -32,6 +32,24 @@ In headless testing, the simulation lands close to real MLB league rates: about 
 
 Click **Edit rosters** on the start screen to rename teams, change colors, reorder lineups and edit every rating and pitch. Rosters are saved in your browser's localStorage, and you can export them to or import them from JSON.
 
+## Real MLB teams
+
+Pick **MLB 2026** under *League* on the start screen to play with all 30 real clubs: each club's most-used starter at every position, five-man rotation, closer, setup men and bullpen, with real handedness, jersey numbers and pitch mixes. Hover a batter or pitcher in the matchup panel (or a name in the roster editor) to see his real season line. Edits to MLB rosters are saved separately from the fictional league.
+
+Ratings come from real data, not guesses:
+
+1. **Calibration** (`tools/mlb/calibrate.mjs`): simulates ~2,800 games with random ratings and fits how the sim turns contact/power/eye/speed and velocity/control/stuff into K%, BB%, HR%, singles and extra-base hits.
+2. **Import** (`tools/mlb/import.mjs`): pulls stat lines from the MLB Stats API and Statcast leaderboards from Baseball Savant. It blends three seasons (5/4/3 weights), regresses small samples toward average, and searches for the ratings that make the sim reproduce each player's rates relative to league average. Speed comes from sprint speed, fielding from Outs Above Average (pop time for catchers), arm from throw velocity, velo from the average fastball, stamina from pitches per outing, and the spread of each pitcher's pitch ratings from per-pitch whiff% and xwOBA.
+3. **Validation** (`tools/mlb/validate.mjs`): plays the real clubs against each other and compares the results with reality. `--adjust` folds any league-wide gap back into the import.
+
+In 1,260 validation games the sim hit .242/.318/.403 (real 2026: .244/.318/.400), and each regular's simulated K% correlated r=0.91 with his real K% (BB% 0.76, HR% 0.73, ISO 0.70).
+
+To rebuild for a new season:
+
+```bash
+node tools/mlb/import.mjs 2027
+```
+
 ## Running locally
 
 ES modules need a web server, so opening the file directly won't work:
@@ -58,6 +76,6 @@ js/sim/      simulation engine (no DOM, runs in Node too)
   game.js      innings, plate appearances, bullpen, stats, play-by-play
 js/render/   Three.js ballpark, player figures, broadcast camera
 js/ui/       HUD, box score, roster editor, sound
-js/data/     default teams and storage
-tools/       headless test scripts
+js/data/     default teams and storage; mlb/ holds imported MLB rosters
+tools/       headless test scripts; tools/mlb/ builds the MLB rosters
 ```

@@ -1,6 +1,6 @@
 // App controller: setup screen, main loop, controls.
 import { Game } from './sim/game.js';
-import { loadTeams, loadPrefs, savePrefs } from './data/storage.js';
+import { loadTeams, loadPrefs, savePrefs, listLeagues } from './data/storage.js';
 import { Stage } from './render/stage.js';
 import { Hud, renderBoxScore } from './ui/hud.js';
 import { Editor } from './ui/editor.js';
@@ -9,8 +9,16 @@ import { Sound } from './ui/sound.js';
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
-let teams = loadTeams();
-const prefs = Object.assign({ speed: 1, camera: 'broadcast', log: true, away: 0, home: 1 }, loadPrefs());
+const prefs = Object.assign({ speed: 1, camera: 'broadcast', log: true, league: 'custom', picks: {} }, loadPrefs());
+let league = prefs.league;
+let teams;
+try {
+  teams = await loadTeams(league);
+} catch (err) {
+  console.warn(err);
+  league = 'custom';
+  teams = await loadTeams(league);
+}
 let stage;
 let game = null;
 let paused = false;
@@ -20,6 +28,30 @@ const sound = new Sound();
 const editor = new Editor((t) => {
   teams = t;
   fillSetup();
+});
+
+// League picker: the fictional league plus any imported MLB seasons.
+const leagueSel = $('league');
+listLeagues().then((leagues) => {
+  leagueSel.innerHTML = leagues.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join('');
+  leagueSel.value = leagues.some((l) => l.id === league) ? league : 'custom';
+  leagueSel.closest('.league-pick').classList.toggle('hidden', leagues.length < 2);
+});
+leagueSel.addEventListener('change', async () => {
+  const next = leagueSel.value;
+  leagueSel.disabled = true;
+  try {
+    teams = await loadTeams(next);
+    league = next;
+    prefs.league = next;
+    savePrefs(prefs);
+    fillSetup();
+  } catch (err) {
+    alert(err.message);
+    leagueSel.value = league;
+  } finally {
+    leagueSel.disabled = false;
+  }
 });
 
 try {
@@ -34,11 +66,17 @@ try {
 
 // ---------- setup screen ----------
 function fillSetup() {
-  const opts = teams.map((t, i) => `<option value="${i}">${esc(t.name)}</option>`).join('');
+  const opt = (t) => `<option value="${teams.indexOf(t)}">${esc(t.name)}</option>`;
+  const groups = [...new Set(teams.map((t) => t.league).filter(Boolean))].sort();
+  const opts = groups.length > 1
+    ? groups.map((g) => `<optgroup label="${esc(g === 'AL' ? 'American League' : g === 'NL' ? 'National League' : g)}">${teams.filter((t) => t.league === g).map(opt).join('')}</optgroup>`).join('') +
+      teams.filter((t) => !t.league).map(opt).join('')
+    : teams.map(opt).join('');
   $('away-team').innerHTML = opts;
   $('home-team').innerHTML = opts;
-  const a = Math.min(prefs.away, teams.length - 1);
-  let h = Math.min(prefs.home, teams.length - 1);
+  const pick = prefs.picks[league] || { away: 0, home: 1 };
+  const a = Math.min(pick.away, teams.length - 1);
+  let h = Math.min(pick.home, teams.length - 1);
   if (h === a) h = (a + 1) % teams.length;
   $('away-team').value = a;
   $('home-team').value = h;
@@ -55,7 +93,7 @@ function fillPitchers(side) {
 
 $('away-team').addEventListener('change', () => fillPitchers('away'));
 $('home-team').addEventListener('change', () => fillPitchers('home'));
-$('btn-edit').addEventListener('click', () => editor.open(teams));
+$('btn-edit').addEventListener('click', () => editor.open(teams, league));
 
 $('btn-start').addEventListener('click', () => {
   const a = +$('away-team').value, h = +$('home-team').value;
@@ -63,7 +101,7 @@ $('btn-start').addEventListener('click', () => {
     alert('Pick two different teams.');
     return;
   }
-  prefs.away = a; prefs.home = h;
+  prefs.picks[league] = { away: a, home: h };
   savePrefs(prefs);
   startGame(teams[a], teams[h], $('away-sp').value, $('home-sp').value, $('opt-ghost').checked);
   sound.unlock();

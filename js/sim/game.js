@@ -28,7 +28,7 @@ function emptyBat() {
   return { pa: 0, ab: 0, r: 0, h: 0, d: 0, t: 0, hr: 0, rbi: 0, bb: 0, so: 0, hbp: 0, sf: 0, sh: 0, sb: 0, cs: 0 };
 }
 function emptyPit() {
-  return { outs: 0, bf: 0, h: 0, r: 0, er: 0, bb: 0, so: 0, hr: 0, pc: 0, strikes: 0 };
+  return { outs: 0, bf: 0, h: 0, d: 0, t: 0, r: 0, er: 0, bb: 0, hbp: 0, so: 0, hr: 0, pc: 0, strikes: 0 };
 }
 
 export function ordinal(n) {
@@ -774,7 +774,7 @@ export class Game {
     if (kind === 'BB') bl.bb++; else bl.hbp++;
     const pl = this.pitLine();
     pl.bf++;
-    if (kind === 'BB') pl.bb++;
+    if (kind === 'BB') pl.bb++; else pl.hbp++;
     // force runners
     const b = s.bases;
     const scored = [];
@@ -875,8 +875,8 @@ export class Game {
       bl.h++;
       pl.h++;
       s.hits[s.half]++;
-      if (hitBases === 2) bl.d++;
-      if (hitBases === 3) bl.t++;
+      if (hitBases === 2) { bl.d++; pl.d++; }
+      if (hitBases === 3) { bl.t++; pl.t++; }
       if (hitBases === 4) { bl.hr++; pl.hr++; }
     }
     s.errors[1 - s.half] += errs.length;

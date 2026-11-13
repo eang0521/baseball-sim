@@ -174,8 +174,13 @@ select option { background: var(--panel-solid); }
 .fine { color: var(--muted); font-size: 12px; }
 .mhead { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
 .mhead h2 { font-family: var(--cond); font-size: 28px; margin: 0; }
-.matchup-pick { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: center; margin-bottom: 14px; }
-.matchup-pick .side { display: flex; flex-direction: column; gap: 5px; }
+.league-pick { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.league-pick label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; }
+.league-pick select { flex: 1; }
+.league-pick.hidden { display: none; }
+.matchup-pick { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 12px; align-items: center; margin-bottom: 14px; }
+.matchup-pick .side { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.matchup-pick select { width: 100%; min-width: 0; text-overflow: ellipsis; }
 .matchup-pick label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; margin-top: 4px; }
 .matchup-pick .vs { font-family: var(--cond); font-size: 28px; color: var(--muted); padding-top: 18px; }
 .check { display: flex; gap: 8px; align-items: center; color: var(--muted); margin: 6px 0 16px; cursor: pointer; }

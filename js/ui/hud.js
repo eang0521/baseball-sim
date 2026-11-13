@@ -30,6 +30,7 @@ export class Hud {
     this.bannerT = 0;
     this.lastMessage = '';
     this.game = null;
+    this.hideCount = false;
   }
 
   setGame(game) {
@@ -68,7 +69,11 @@ export class Hud {
     this.set('sb-bases', 'bases', bases, (el) => {
       el.querySelectorAll('rect').forEach((r) => r.classList.toggle('on', !!s.bases[+r.dataset.b]));
     });
-    this.set('sb-count', 'count', `${s.balls}-${s.strikes}`, (el, v) => { el.textContent = v; });
+    const masked = this.hideCount && game.lastPitchOnly && !game.over;
+    this.set('sb-count', 'count', masked ? '?' : `${s.balls}-${s.strikes}`, (el, v) => {
+      el.textContent = v === '?' ? '\u2013 \u2013' : v;
+      el.classList.toggle('masked', v === '?');
+    });
     this.set('sb-outs', 'outs', s.outs, (el, v) => {
       el.querySelectorAll('i').forEach((d, i) => d.classList.toggle('on', i < v));
     });
@@ -93,18 +98,21 @@ export class Hud {
       const side = s.pitcher ? batSide(b, s.pitcher) : b.bats;
       this.set('mu-batter', 'mub', `${b.id}`, (el) => { el.textContent = b.name; el.title = b.real ? `Real season: ${b.real}` : ''; });
       this.set('mu-batter-sub', 'mubs', `${b.id}|${bl.pa}|${bl.h}|${bl.rbi}|${s.pitcher?.id}`, (el) => {
-        el.textContent = `${idx}. ${b.pos} · Bats ${b.bats === 'S' ? `S (${side})` : b.bats} · ${batToday(bl)}`;
+        el.textContent = `${idx}. ${game.offense.posOf?.get(b.id) || b.pos} · Bats ${b.bats === 'S' ? `S (${side})` : b.bats} · ${batToday(bl)}`;
       });
     }
     const p = def.pitcher;
     const pl = def.pit.get(p.id) || { outs: 0, r: 0, so: 0, pc: 0 };
     this.set('mu-pitcher', 'mup', p.id, (el) => { el.textContent = p.name; el.title = p.real ? `Real season: ${p.real}` : ''; });
-    this.set('mu-pitcher-sub', 'mups', `${p.id}|${pl.pc}|${pl.outs}|${pl.r}|${pl.so}`, (el) => {
-      el.textContent = `${p.throws}HP ${p.role} · ${pl.pc} pitches · ${ip(pl.outs)} IP, ${pl.r} R, ${pl.so} K`;
+    this.set('mu-pitcher-sub', 'mups', `${p.id}|${pl.pc}|${pl.outs}|${pl.r}|${pl.so}|${this.hideCount}`, (el) => {
+      // the pitch count would give the at-bat's count away
+      el.textContent = this.hideCount && game.lastPitchOnly
+        ? `${p.throws}HP ${p.role} · ${ip(pl.outs)} IP, ${pl.r} R, ${pl.so} K`
+        : `${p.throws}HP ${p.role} · ${pl.pc} pitches · ${ip(pl.outs)} IP, ${pl.r} R, ${pl.so} K`;
     });
 
     // strike zone
-    this.set('zone-svg', 'zone', `${b?.id}|${game.pitchLog.length}|${s.half}`, (el) => this.drawZone(el, game));
+    this.set('zone-svg', 'zone', `${b?.id}|${game.pitchLog.length}|${s.half}|${this.hideCount}`, (el) => this.drawZone(el, game));
 
     // banner
     if (game.message && game.message !== this.lastMessage) {
@@ -140,7 +148,9 @@ export class Hud {
     }
     // home plate
     h += `<path d="M${X(0.216)} 128 L${X(-0.216)} 128 L${X(-0.216)} 131 L60 135 L${X(0.216)} 131 Z" fill="#e2e8f0" opacity=".6"/>`;
-    for (const p of game.pitchLog) {
+    // with the count hidden, only plot pitches the viewer actually saw
+    const log = this.hideCount && game.lastPitchOnly ? game.pitchLog.filter((p) => p.shown) : game.pitchLog;
+    for (const p of log) {
       const cx = Math.max(8, Math.min(112, X(p.x))), cy = Math.max(8, Math.min(132, Y(p.z)));
       const col = PITCH_TYPES[p.type].color;
       const swung = /Swing|Foul|play/i.test(p.result);
@@ -187,10 +197,14 @@ export function renderBoxScore(game) {
     h += `<div><h3><i style="background:${side.team.primary}"></i>${esc(side.team.name)}</h3>`;
     h += '<div class="box-scroll"><table class="box-table"><thead><tr><th>Batting</th><th>AB</th><th>R</th><th>H</th><th>RBI</th><th>BB</th><th>K</th><th>HR</th></tr></thead><tbody>';
     const tot = { ab: 0, r: 0, h: 0, rbi: 0, bb: 0, so: 0, hr: 0 };
-    for (const p of side.lineup) {
-      const b = side.bat.get(p.id);
-      for (const k in tot) tot[k] += b[k];
-      h += `<tr><td>${esc(p.name)}<span class="pos">${p.pos}</span></td><td>${b.ab}</td><td>${b.r}</td><td>${b.h}</td><td>${b.rbi}</td><td>${b.bb}</td><td>${b.so}</td><td>${b.hr}</td></tr>`;
+    const slots = side.slots || side.lineup.map((p) => [p]);
+    for (const slot of slots) {
+      slot.forEach((p, j) => {
+        const b = side.bat.get(p.id);
+        for (const k in tot) tot[k] += b[k];
+        const pos = side.label?.get(p.id) || p.pos;
+        h += `<tr><td${j ? ' class="sub"' : ''}>${esc(p.name)}<span class="pos">${pos}</span></td><td>${b.ab}</td><td>${b.r}</td><td>${b.h}</td><td>${b.rbi}</td><td>${b.bb}</td><td>${b.so}</td><td>${b.hr}</td></tr>`;
+      });
     }
     h += `<tr class="tot"><td>Totals</td><td>${tot.ab}</td><td>${tot.r}</td><td>${tot.h}</td><td>${tot.rbi}</td><td>${tot.bb}</td><td>${tot.so}</td><td>${tot.hr}</td></tr></tbody></table></div>`;
     h += '<div class="box-scroll"><table class="box-table"><thead><tr><th>Pitching</th><th>IP</th><th>H</th><th>R</th><th>BB</th><th>K</th><th>HR</th><th>PC-S</th></tr></thead><tbody>';
@@ -199,7 +213,7 @@ export function renderBoxScore(game) {
       h += `<tr><td>${esc(p.name)}<span class="pos">${p.role}</span></td><td>${ip(l.outs)}</td><td>${l.h}</td><td>${l.r}</td><td>${l.bb}</td><td>${l.so}</td><td>${l.hr}</td><td>${l.pc}-${l.strikes}</td></tr>`;
     }
     h += '</tbody></table></div>';
-    const xb = side.lineup.map((p) => [p, side.bat.get(p.id)]);
+    const xb = slots.flat().map((p) => [p, side.bat.get(p.id)]);
     const list = (k, label) => {
       const arr = xb.filter(([, b]) => b[k] > 0).map(([p, b]) => `${esc(p.name.split(' ').slice(-1)[0])}${b[k] > 1 ? ` ${b[k]}` : ''}`);
       return arr.length ? `<div class="fine"><b>${label}:</b> ${arr.join(', ')}</div>` : '';

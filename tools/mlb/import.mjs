@@ -318,6 +318,8 @@ async function main() {
       id: `mlb${id}`, name: p.fullName || cur.player.fullName, num: +(p.primaryNumber ?? 0) || 0, pos,
       bats: p.batSide?.code === 'L' ? 'L' : p.batSide?.code === 'S' ? 'S' : 'R',
       contact, power, eye, speed, fielding: clamp(fielding), arm: clamp(armR),
+      // other spots he played this season (at least ~8 starts' worth), so the coach can move him
+      alt: FIELD.filter((x) => x !== pos && (g[x] || 0) >= 8),
       real: `${s.avg}/${s.obp}/${s.slg}, ${s.homeRuns} HR, ${s.stolenBases} SB in ${s.plateAppearances} PA`,
     };
   }
@@ -439,6 +441,20 @@ async function main() {
     const lineup = [...chosen].map(([id, pos]) => makeHitter(id, pos));
     orderLineup(lineup, hitByYear[season]);
 
+    // Bench: the backup catcher with the most starts behind the plate, then the most-used others.
+    const mainPos = (id) => {
+      const g = posGames.get(id) || {};
+      const best = FIELD.filter((x) => g[x]).sort((a, b) => g[b] - g[a])[0];
+      return best || 'DH';
+    };
+    const left = byPA.filter((x) => !chosen.has(x.player.id));
+    const benchIds = [];
+    const bc = [...left].filter((x) => (posGames.get(x.player.id)?.C || 0) > 0)
+      .sort((a, b) => (posGames.get(b.player.id).C) - (posGames.get(a.player.id).C))[0];
+    if (bc) benchIds.push(bc.player.id);
+    for (const x of left) if (benchIds.length < 4 && !benchIds.includes(x.player.id)) benchIds.push(x.player.id);
+    const bench = benchIds.map((id) => makeHitter(id, id === bc?.player.id ? 'C' : mainPos(id)));
+
     // Staff: five starters by games started, closer by saves, setup men by holds, then relievers.
     const used = new Set();
     const take = (arr, n) => arr.filter((s) => !used.has(s.player.id)).slice(0, n).map((s) => { used.add(s.player.id); return s; });
@@ -454,8 +470,8 @@ async function main() {
       ...cl.map((s) => makePitcher(s.player.id, 'CL')),
     ];
     const [primary, secondary] = COLORS[abbr] || ['#1d4ed8', '#f8fafc'];
-    teams.push({ id: `mlb-${abbr.toLowerCase()}`, name: t.name, abbr, primary, secondary, league: t.league?.name, lineup, pitchers });
-    console.log(`${abbr.padEnd(4)} ${lineup.map((h) => `${h.pos}:${h.name.split(' ').slice(-1)[0]}`).join(' ')}`);
+    teams.push({ id: `mlb-${abbr.toLowerCase()}`, name: t.name, abbr, primary, secondary, league: t.league?.name, lineup, bench, pitchers });
+    console.log(`${abbr.padEnd(4)} ${lineup.map((h) => `${h.pos}:${h.name.split(' ').slice(-1)[0]}`).join(' ')} | bench ${bench.map((h) => `${h.pos}:${h.name.split(' ').slice(-1)[0]}`).join(' ')}`);
   }
 
   const out = {

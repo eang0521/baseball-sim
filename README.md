@@ -13,9 +13,13 @@ A physics-driven, 9-on-9 baseball simulation that plays itself in the browser, r
 - **Baserunning:** runners take leads and weigh their time to the next base against the ball's time there. They tag up, freeze on line drives, get doubled off, and are forced out or tagged out. Double plays happen on their own.
 - **Stolen bases:** the manager sends runners when the runner's speed, the pitcher's handedness and the catcher's arm and exchange time give a good chance. Pitchers deliver from the stretch with runners on. The runner's jump, the pitch, the catcher's throw and the tag all play out physically, so there are steals of second and third, double steals, caught stealings (including strike-'em-out, throw-'em-out) and extra bases on bad throws. With two outs and a full count, runners go on the pitch.
 - **Bunts:** weak hitters sacrifice in close, late games (and in extra innings with the runner on second). The corner infielders charge and the second baseman cheats toward first, and the defense takes the sure out unless the lead runner is clearly beaten. Fast slap hitters sometimes bunt for a hit. Foul bunts with two strikes are strikeouts.
-- **Managing:** whoever starts the game pitches as deep as his stamina allows unless he gets knocked around. After that, relievers, setup men and closers are used by situation. Games use the designated hitter and the extra-innings runner on second (the runner is optional).
+- **Managing:** whoever starts the game pitches as deep as his stamina allows unless he gets knocked around. After that, relievers, setup men and closers are used by situation. Each club carries a four-man bench. Late in close games the manager pinch-hits (mostly for a platoon edge), pinch-runs for a slow tying or go-ahead runner, and brings in a better glove to protect a lead. Subs who end up out of position cost fielding, so a manager who pinch-hits with an outfielder for the second baseman will usually bring in a real infielder next inning. Games use the designated hitter and the extra-innings runner on second (the runner is optional).
 
 In headless testing, the simulation lands close to real MLB league rates: about 4.3 runs per team per game, a .245/.315/.420 slash line, 22–23% strikeouts, 8.5% walks, about 3% home runs per plate appearance, and roughly 0.8 stolen bases per team per game at about 80% success.
+
+## Last-pitch mode
+
+Tick **Watch only the last pitch of each at-bat** on the start screen (or pick *Last pitch only* in the control bar) to see only the pitch that decides each plate appearance: ball four, strike three, a hit batter or the swing that puts the ball in play. The other pitches are simmed instantly. The sim decides each pitch's outcome at the start of the windup, so it knows in advance which pitch to show. **Hide the count** blanks the balls and strikes, the pitcher's pitch count and the earlier pitches on the strike-zone plot, so you can't tell from the screen whether a walk or a strikeout is coming.
 
 ## Controls
 
@@ -24,6 +28,7 @@ In headless testing, the simulation lands close to real MLB league rates: about 
 | Space | Pause / resume |
 | 1–4 | Speed ½× / 1× / 2× / 4× |
 | N | Skip to the next batter |
+| W | Toggle last-pitch-only mode |
 | C | Cycle cameras (broadcast, umpire, overhead, free orbit) |
 | L | Play-by-play log |
 | B | Box score |

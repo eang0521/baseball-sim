@@ -106,6 +106,7 @@ export function randomTeam(seed, meta = {}) {
     randomPitcher(rng, 'SU', q + 2, used),
     randomPitcher(rng, 'CL', q + 5, used),
   ];
+  const bench = randomBench(rng, q, used);
   return {
     id: meta.id || newId('t'),
     name: meta.name || 'Team',
@@ -113,8 +114,22 @@ export function randomTeam(seed, meta = {}) {
     primary: meta.primary || '#1d4ed8',
     secondary: meta.secondary || '#f8fafc',
     lineup: order,
+    bench,
     pitchers,
   };
+}
+
+// Four reserves: a backup catcher, a middle infielder, an outfielder and a corner bat.
+// Each can cover a few other spots.
+const BENCH_SPOTS = [['C', []], ['SS', ['2B', '3B']], ['CF', ['LF', 'RF']], ['1B', ['3B', 'LF', 'RF']]];
+export function randomBench(rng, quality = 55, used = new Set()) {
+  return BENCH_SPOTS.map(([pos, alt]) => ({ ...randomHitter(rng, pos, quality - 7 + rng.gauss(0, 3), used), alt }));
+}
+
+function hashSeed(str) {
+  let h = 2166136261;
+  for (const c of String(str)) h = Math.imul(h ^ c.charCodeAt(0), 16777619);
+  return h >>> 0;
 }
 
 export function defaultTeams() {
@@ -137,18 +152,24 @@ export function normalizeTeam(t) {
   team.secondary = team.secondary || '#f8fafc';
   if (t.league) team.league = String(t.league);
   const num = (v, d) => clamp(Number.isFinite(+v) ? +v : d, 1, 99);
-  team.lineup = (team.lineup || []).slice(0, 9).map((h) => ({
-    id: h.id || newId('h'), name: String(h.name || 'Player'), num: h.num ?? 0, pos: h.pos || 'DH',
+  const hitter = (h) => ({
+    id: h.id || newId('h'), name: String(h.name || 'Player'), num: h.num ?? 0, pos: FIELD_POS.includes(h.pos) ? h.pos : 'DH',
     bats: ['R', 'L', 'S'].includes(h.bats) ? h.bats : 'R',
     contact: num(h.contact, 50), power: num(h.power, 50), eye: num(h.eye, 50),
     speed: num(h.speed, 50), fielding: num(h.fielding, 50), arm: num(h.arm, 50),
+    ...(Array.isArray(h.alt) ? { alt: h.alt.filter((x) => FIELD_POS.includes(x) && x !== 'DH') } : {}),
     ...(h.real ? { real: String(h.real) } : {}),
-  }));
+  });
+  team.lineup = (team.lineup || []).slice(0, 9).map(hitter);
   while (team.lineup.length < 9) {
     const have = new Set(team.lineup.map((h) => h.pos));
     const pos = FIELD_POS.find((p) => !have.has(p)) || 'DH';
     team.lineup.push(randomHitter(rng, pos));
   }
+  // Older saved teams have no bench: give them a repeatable one.
+  team.bench = Array.isArray(team.bench)
+    ? team.bench.slice(0, 8).map(hitter)
+    : randomBench(new RNG(hashSeed(team.id)), 52, new Set([...team.lineup.map((h) => h.name)]));
   team.pitchers = (team.pitchers || []).map((p) => ({
     id: p.id || newId('pp'), name: String(p.name || 'Pitcher'), num: p.num ?? 0,
     throws: p.throws === 'L' ? 'L' : 'R',

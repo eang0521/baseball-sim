@@ -95,6 +95,26 @@ export class Editor {
     }
     h += '</div>';
 
+    t.bench = t.bench || [];
+    h += '<div class="ed-sec"><h3>Bench</h3><div class="box-scroll"><table class="ed-table"><thead><tr><th>Name</th><th>Pos</th><th>Bats</th>';
+    for (const [, l] of HIT_KEYS) h += `<th>${l}</th>`;
+    h += '<th>OVR</th><th></th></tr></thead><tbody>';
+    t.bench.forEach((p, i) => {
+      const ovr = Math.round((p.contact + p.power + p.eye + p.speed * 0.6 + p.fielding * 0.7 + p.arm * 0.5) / 4.8);
+      h += `<tr data-b="${i}">
+        <td><input class="name" data-k="name" value="${esc(p.name)}" maxlength="32"${p.real ? ` title="${esc(p.real)}"` : ''}></td>
+        <td><select data-k="pos">${FIELD_POS.map((x) => `<option ${x === p.pos ? 'selected' : ''}>${x}</option>`).join('')}</select></td>
+        <td><select data-k="bats">${['R', 'L', 'S'].map((x) => `<option ${x === p.bats ? 'selected' : ''}>${x}</option>`).join('')}</select></td>`;
+      for (const [k] of HIT_KEYS) h += `<td><input class="num" type="number" min="1" max="99" data-k="${k}" value="${p[k]}"></td>`;
+      h += `<td class="ovr">${ovr}</td><td style="white-space:nowrap">
+        <button data-act="bstart" title="Swap into the lineup with the starter at his position">⇅ Start</button>
+        <button data-act="brand" title="Replace with a random player">🎲</button>
+        <button data-act="bdel" title="Remove from the bench">✕</button></td></tr>`;
+    });
+    h += '</tbody></table></div>';
+    if (t.bench.length < 6) h += '<button data-act="badd" style="margin-top:6px">+ Add bench player</button>';
+    h += '<p class="fine">Late in close games the manager pinch-hits (especially for a platoon edge), pinch-runs for slow runners and brings in better gloves to protect a lead. Keep a backup catcher here.</p></div>';
+
     h += '<div class="ed-sec"><h3>Pitching staff</h3><div class="box-scroll"><table class="ed-table"><thead><tr><th>Name</th><th>Throws</th><th>Role</th><th>Velo</th><th>Ctrl</th><th>Stam</th><th>Pitches (type · rating)</th><th></th></tr></thead><tbody>';
     t.pitchers.forEach((p, i) => {
       h += `<tr data-p="${i}">
@@ -125,10 +145,10 @@ export class Editor {
       if (el.dataset.f === 'name' && e.type === 'change') this.render();
       return;
     }
-    const hr = el.closest('tr[data-h]');
+    const hr = el.closest('tr[data-h]') || el.closest('tr[data-b]');
     const pr = el.closest('tr[data-p]');
     if (hr && el.dataset.k) {
-      const p = t.lineup[+hr.dataset.h];
+      const p = hr.dataset.b != null ? t.bench[+hr.dataset.b] : t.lineup[+hr.dataset.h];
       const k = el.dataset.k;
       p[k] = ['name', 'pos', 'bats'].includes(k) ? el.value : clampNum(el.value, 1, 99);
       if (e.type === 'change' && k !== 'name') this.render();
@@ -152,8 +172,24 @@ export class Editor {
     const act = b.dataset.act;
     const hr = b.closest('tr[data-h]');
     const pr = b.closest('tr[data-p]');
+    const br = b.closest('tr[data-b]');
     const used = new Set();
-    if (hr) {
+    if (br) {
+      const i = +br.dataset.b;
+      const p = t.bench[i];
+      if (act === 'bdel') t.bench.splice(i, 1);
+      if (act === 'brand') t.bench[i] = randomHitter(this.rng, p.pos, 50, used);
+      if (act === 'bstart') {
+        let j = t.lineup.findIndex((x) => x.pos === p.pos);
+        if (j < 0) j = t.lineup.findIndex((x) => x.pos === 'DH');
+        if (j < 0) j = 8;
+        [t.lineup[j], t.bench[i]] = [p, t.lineup[j]];
+        this.status(`${p.name} moves into the lineup; ${t.bench[i].name} goes to the bench.`);
+      }
+    } else if (act === 'badd') {
+      t.bench = t.bench || [];
+      t.bench.push(randomHitter(this.rng, 'SS', 50, used));
+    } else if (hr) {
       const i = +hr.dataset.h;
       if (act === 'up' && i > 0) [t.lineup[i - 1], t.lineup[i]] = [t.lineup[i], t.lineup[i - 1]];
       if (act === 'down' && i < 8) [t.lineup[i + 1], t.lineup[i]] = [t.lineup[i], t.lineup[i + 1]];

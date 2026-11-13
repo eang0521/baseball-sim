@@ -2,7 +2,7 @@
 import { RNG } from './rng.js';
 import {
   BASES, BASE_DIST, DEFAULT_SPOTS, POSITIONS, ZONE_PLANE_Y, CATCHER_Y, RUBBER,
-  describeDirection, FT, POS_NUM, pathPoint,
+  describeDirection, FT, POS_NUM, pathPoint, isFairAngle,
 } from './field.js';
 import { makeBall, stepBall } from './physics.js';
 import {
@@ -12,6 +12,7 @@ import {
 import { runnerVmax, armSpeed, runTime, RUNNER_ACCEL } from './entities.js';
 import { Play } from './play.js';
 import { PITCH_TYPES } from './pitches.js';
+import { coachOffense, coachDefense, fitPenalty } from './coach.js';
 
 const FIXED_DT = 1 / 200;
 const POS_NAME = { P: 'pitcher', C: 'catcher', '1B': 'first', '2B': 'second', '3B': 'third', SS: 'short', LF: 'left', CF: 'center', RF: 'right' };
@@ -45,6 +46,10 @@ export class Game {
     this.rng = new RNG(opts.seed ?? Math.floor(Math.random() * 2 ** 31));
     this.extraRunner = opts.extraRunner !== false;
     this.stealRate = opts.stealRate ?? 0.12;
+    this.subs = opts.subs !== false;
+    // Watch only the pitch that ends each plate appearance; the others are simmed instantly.
+    this.lastPitchOnly = !!opts.lastPitchOnly;
+    this.showPitch = true;
     this.instant = false;
     this.sides = [this.makeSide(away, opts.awayStarter), this.makeSide(home, opts.homeStarter)];
     this.state = {
@@ -83,8 +88,17 @@ export class Game {
       bat: new Map(lineup.map((p) => [p.id, emptyBat()])),
       pit: new Map([[sp.id, emptyPit()]]),
       runsThisOuting: 0, outsThisOuting: 0,
+      bench: [...(team.bench || [])],
+      // every player who has filled each batting-order slot, starter first (for the box score)
+      slots: lineup.map((p) => [p]),
+      label: new Map(),
+      entered: new Map(),
     };
     side.defense = this.assignDefense(lineup);
+    // where each player in the game is currently playing (or DH)
+    side.posOf = new Map(lineup.map((p) => [p.id, 'DH']));
+    for (const [pos, p] of Object.entries(side.defense)) side.posOf.set(p.id, pos);
+    for (const p of lineup) side.label.set(p.id, side.posOf.get(p.id));
     return side;
   }
 
@@ -114,7 +128,9 @@ export class Game {
     const def = this.defenseSide;
     this.world.fielders = POSITIONS.map((pos) => {
       const player = pos === 'P' ? def.pitcher : def.defense[pos];
-      const fp = pos === 'P' ? { ...player, speed: 45, fielding: 55, arm: 70 } : player;
+      const pen = pos === 'P' ? 0 : fitPenalty(player, pos);
+      const fp = pos === 'P' ? { ...player, speed: 45, fielding: 55, arm: 70 }
+        : pen ? { ...player, fielding: Math.max(1, (player.fielding ?? 50) - pen) } : player;
       return {
         pos, player: fp, x: 0, y: 0, spd: 0, vx: 0, vy: 0, facing: Math.PI, role: 'hold',
         target: { x: 0, y: 0 }, anim: 'ready', animT: 0, team: 1 - this.state.half,
@@ -161,6 +177,7 @@ export class Game {
   // ---------- time ----------
   advance(dt) {
     if (this.over) return;
+    this.skipHidden();
     this.acc += Math.min(dt, 0.5);
     let n = 0;
     while (this.acc >= FIXED_DT && n < 400) {
@@ -291,9 +308,15 @@ export class Game {
       const prev = off.lineup[(off.idx + 8) % 9];
       s.bases[2] = prev;
     }
-    this.setupHalf();
     const off = this.offense.team;
     this.addLog(`${s.half === 0 ? 'Top' : 'Bottom'} of the ${ORD(s.inning)} — ${off.name} batting`, 'inning');
+    if (this.subs) coachDefense(this, this.defenseSide);
+    const fielding = this.defenseSide;
+    for (const [id, pos] of fielding.posOf) {
+      const l = fielding.label.get(id);
+      if ((l === 'PH' || l === 'PR') && pos !== 'DH') fielding.label.set(id, `${l}-${pos}`);
+    }
+    this.setupHalf();
     if (s.bases[2]) this.addLog(`${s.bases[2].name} starts the inning on second base.`, 'info');
     this.inningStart = true;
     this.startPA();
@@ -336,12 +359,14 @@ export class Game {
   startPA(afterChange = false) {
     const s = this.state;
     const off = this.offense;
+    if (this.subs) coachOffense(this);
     s.batter = off.lineup[off.idx];
     if (!afterChange && this.checkPitchingChange()) return;
     s.pitcher = this.defenseSide.pitcher;
     s.balls = 0;
     s.strikes = 0;
     this.paOver = false;
+    this.showPitch = !this.lastPitchOnly;
     this.paSeq = (this.paSeq || 0) + 1;
     this.pitchLog = [];
     this.lastType = null;
@@ -365,6 +390,32 @@ export class Game {
       return;
     }
     this.startPA();
+  }
+
+  // ---------- substitutions ----------
+  get halfIndex() { return this.state.inning * 2 + this.state.half; }
+
+  // Replace a player in the game with someone from the bench: same batting slot, same position,
+  // and on the same base if he was a runner. 'how' is PH, PR or DEF (box-score labels).
+  substitute(side, out, inn, how) {
+    const idx = side.lineup.indexOf(out);
+    if (idx < 0 || !side.bench.includes(inn)) return false;
+    side.lineup[idx] = inn;
+    side.slots[idx].push(inn);
+    side.bench.splice(side.bench.indexOf(inn), 1);
+    side.bat.set(inn.id, emptyBat());
+    const pos = side.posOf.get(out.id) || 'DH';
+    side.posOf.delete(out.id);
+    side.posOf.set(inn.id, pos);
+    if (pos !== 'DH') side.defense[pos] = inn;
+    // pinch hitters/runners get their position added once they actually take the field
+    side.label.set(inn.id, how === 'DEF' ? pos : how);
+    side.entered.set(inn.id, this.halfIndex);
+    const s = this.state;
+    for (let k = 1; k <= 3; k++) if (s.bases[k] === out) s.bases[k] = inn;
+    if (s.batter === out) s.batter = inn;
+    this.onEvent({ type: 'substitution', how });
+    return true;
   }
 
   // ---------- bullpen ----------
@@ -440,6 +491,120 @@ export class Game {
     // the delivery is game time (runners move during it), so it is never skipped
     this.phase = 'windup';
     this.phaseT = runnersOn ? STRETCH + this.rng.gauss(0, 0.06) : PAUSE.windup;
+    this.prepPitch();
+  }
+
+  // Decide the pitch, the swing and the call up front (the ball's flight is deterministic), so
+  // last-pitch mode knows before the windup whether this pitch ends the plate appearance.
+  prepPitch() {
+    const s = this.state;
+    const p = this.defenseSide.pitcher;
+    const pc = this.defenseSide.pc.get(p.id) || 0;
+    const side = batSide(s.batter, p);
+    const pitch = planPitch(this.rng, p, pc, { balls: s.balls, strikes: s.strikes }, side, this.lastType);
+    this.lastType = pitch.type;
+    let swing;
+    if (this.bunting) {
+      // square around; pull the bat back on pitches well out of the zone
+      const seen = zoneDistance(pitch.plate.x + this.rng.gauss(0, 0.05), pitch.plate.z + this.rng.gauss(0, 0.05));
+      swing = seen < 0.06 || (this.bunting === 'sac' && seen < 0.12 && this.rng.chance(0.5));
+    } else {
+      swing = swingDecision(this.rng, s.batter, pitch, { balls: s.balls, strikes: s.strikes });
+    }
+    const call = this.judgePitch(pitch, swing, side, p);
+    this.pending = { pitch, swing, call };
+    this.showPitch = !this.lastPitchOnly || (this.endsPA(call.outcome) &&
+      !(call.outcome === 'inplay' && this.predictPlainFoul(call.res, pitch)));
+  }
+
+  // Fly the batted ball with no fielders around: does it end up foul where nobody could catch it?
+  // Used only to decide what last-pitch mode shows; the real play is simulated normally.
+  predictPlainFoul(res, pitch) {
+    const { v, w } = battedBallVector({ ...res, type: battedType(res.la) });
+    const b = makeBall({ x: pitch.plate.x, y: ZONE_PLANE_Y + 0.25, z: pitch.plate.z }, v, w);
+    const along = () => Math.max((b.p.x + b.p.y) / Math.SQRT2, (b.p.y - b.p.x) / Math.SQRT2);
+    let air = true;
+    for (let t = 0; t < 12; t += FIXED_DT) {
+      const ev = stepBall(b, FIXED_DT);
+      if (ev === 'homerun' || ev === 'wall') return false;
+      if (ev === 'dead') return !air || !this.foulCatchable(b.p, t);
+      if (air && (ev === 'bounce' || b.rolling)) {
+        air = false;
+        if (along() > BASE_DIST) return !isFairAngle(b.p.x, b.p.y) && !this.foulCatchable(b.p, t);
+      }
+      if (!air && (along() > BASE_DIST || b.stopped)) return !isFairAngle(b.p.x, b.p.y);
+    }
+    return false;
+  }
+
+  foulCatchable(p, t) {
+    let best = Infinity;
+    for (const pos of POSITIONS) {
+      const sp = DEFAULT_SPOTS[pos];
+      best = Math.min(best, Math.hypot(sp.x - p.x, sp.y - p.y));
+    }
+    return best < Math.max(0, t - 0.5) * 7.8;
+  }
+
+  judgePitch(pitch, swing, side, pitcher) {
+    const s = this.state;
+    const { x, z } = pitch.plate;
+    if (swing) {
+      const platoon = side === (pitcher.throws === 'R' ? 'R' : 'L');
+      const res = this.bunting
+        ? resolveBunt(this.rng, s.batter, pitch, side, this.bunting)
+        : resolveSwing(this.rng, s.batter, pitcher, pitch, side, platoon);
+      if (!res.contact) return { outcome: 'swinging', res };
+      if (res.foulTip || res.foulBack) {
+        if (res.foulTip && s.strikes === 2 && this.rng.chance(0.3)) return { outcome: 'foultipK', res };
+        if (this.bunting && s.strikes === 2) return { outcome: 'foultipK', res, bunt: true };
+        return { outcome: 'foul', res };
+      }
+      return { outcome: 'inplay', res };
+    }
+    const hbpX = side === 'R' ? x < -0.64 : x > 0.64;
+    if (hbpX && z > 0.25 && z < 1.7 && Math.abs(x) < 1.1) return { outcome: 'hbp' };
+    const nx = x + this.rng.gauss(0, 0.018);
+    const nz = z + this.rng.gauss(0, 0.018);
+    const strike = Math.abs(nx) <= ZONE.halfW && nz >= ZONE.bot - 0.037 && nz <= ZONE.top + 0.037;
+    return { outcome: strike ? 'called' : 'ball' };
+  }
+
+  // Would this pitch's outcome end the plate appearance? Balls in play always count as the
+  // deciding swing (a few of them turn out to be fouls).
+  endsPA(o) {
+    const s = this.state;
+    if (o === 'ball') return s.balls >= 3;
+    if (o === 'called' || o === 'swinging') return s.strikes >= 2;
+    return o === 'foultipK' || o === 'hbp' || o === 'inplay';
+  }
+
+  hiddenPhase() {
+    return this.lastPitchOnly && !this.showPitch && !this.over &&
+      ['windup', 'pitch', 'afterPitch', 'afterFoul', 'play'].includes(this.phase);
+  }
+
+  // Fast-forward through pitches that don't decide the plate appearance.
+  skipHidden() {
+    if (!this.hiddenPhase()) return;
+    const was = this.instant;
+    const ev = this.events.length;
+    this.instant = true;
+    let n = 0;
+    while (this.hiddenPhase() && n++ < 400000) this.stepFixed(FIXED_DT);
+    this.instant = was;
+    this.events.length = ev;
+    this.acc = 0;
+    if (this.phase === 'windup') {
+      this.message = '';
+      this.lastPitch = null;
+    }
+  }
+
+  setLastPitchOnly(on) {
+    this.lastPitchOnly = !!on;
+    // never cut off a pitch that is already on screen
+    this.showPitch = true;
   }
 
   // obvious bunt: corners creep in, second baseman cheats toward first, batter shows it early
@@ -542,9 +707,8 @@ export class Game {
     const def = this.defenseSide;
     const p = def.pitcher;
     const pc = def.pc.get(p.id) || 0;
-    const side = batSide(s.batter, p);
-    const pitch = planPitch(this.rng, p, pc, { balls: s.balls, strikes: s.strikes }, side, this.lastType);
-    this.lastType = pitch.type;
+    if (!this.pending) this.prepPitch();
+    const { pitch, swing } = this.pending;
     this.curPitch = pitch;
     const b = this.world.ball.phys;
     Object.assign(b, makeBall(pitch.release, pitch.v, pitch.w));
@@ -557,14 +721,10 @@ export class Game {
     pe.animT = 0;
     this.pitchT = 0;
     if (this.bunting) {
-      // square around; pull the bat back on pitches well out of the zone
       this.world.batter.anim = 'bunt';
       this.world.batter.animT = 0;
-      const seen = zoneDistance(pitch.plate.x + this.rng.gauss(0, 0.05), pitch.plate.z + this.rng.gauss(0, 0.05));
-      this.swing = seen < 0.06 || (this.bunting === 'sac' && seen < 0.12 && this.rng.chance(0.5));
-    } else {
-      this.swing = swingDecision(this.rng, s.batter, pitch, { balls: s.balls, strikes: s.strikes });
     }
+    this.swing = swing;
     this.swingStarted = false;
     this.crossed = false;
     this.phase = 'pitch';
@@ -612,10 +772,12 @@ export class Game {
     const ball = this.world.ball.phys;
     const def = this.defenseSide;
     const pl = def.pit.get(def.pitcher.id);
-    const side = batSide(s.batter, s.pitcher);
+    const { call } = this.pending;
+    this.pending = null;
+    const res = call.res;
     // actual location at the plane (use the ball's current position)
     pitch.plate = { x: ball.p.x, z: ball.p.z };
-    const entry = { type: pitch.type, mph: pitch.mph, x: ball.p.x, z: ball.p.z, n: this.pitchLog.length + 1, result: '' };
+    const entry = { type: pitch.type, mph: pitch.mph, x: ball.p.x, z: ball.p.z, n: this.pitchLog.length + 1, result: '', shown: this.showPitch };
     this.pitchLog.push(entry);
     this.lastPitch = entry;
     const m = this.metrics;
@@ -623,46 +785,36 @@ export class Game {
     m.pitches++;
     if (inZone) m.zone++;
     if (this.swing) { m.swings++; if (inZone) m.zswing++; else m.oswing++; }
-    if (this.swing) {
-      const platoon = side === (s.pitcher.throws === 'R' ? 'R' : 'L');
-      const res = this.bunting
-        ? resolveBunt(this.rng, s.batter, pitch, side, this.bunting)
-        : resolveSwing(this.rng, s.batter, s.pitcher, pitch, side, platoon);
-      if (!res.contact) {
-        m.whiff++;
-        entry.result = 'Swinging strike';
-        this.pitchOutcome = 'swinging';
-        pl.strikes++;
+    const o = call.outcome;
+    if (o === 'swinging') {
+      m.whiff++;
+      entry.result = 'Swinging strike';
+      this.pitchOutcome = 'swinging';
+      pl.strikes++;
+      return;
+    }
+    if (o === 'foultipK' || o === 'foul') {
+      m.foulTip++;
+      pl.strikes++;
+      if (o === 'foultipK') {
+        entry.result = call.bunt ? 'Foul bunt (strike three)' : 'Foul tip (strike three)';
+        this.pitchOutcome = 'foultipK';
         return;
       }
-      if (res.foulTip || res.foulBack) {
-        m.foulTip++;
-        pl.strikes++;
-        if (res.foulTip && s.strikes === 2 && this.rng.chance(0.3)) {
-          entry.result = 'Foul tip (strike three)';
-          this.pitchOutcome = 'foultipK';
-          return;
-        }
-        if (this.bunting && s.strikes === 2) {
-          // foul bunt with two strikes is a strikeout
-          entry.result = 'Foul bunt (strike three)';
-          this.pitchOutcome = 'foultipK';
-          return;
-        }
-        this.stealers = null;
-        entry.result = this.bunting ? 'Foul bunt' : 'Foul';
-        this.pitchOutcome = 'foul';
-        const side2 = res.foulBack ? this.rng.gauss(0, 14) : this.rng.gauss(0, 5);
-        ball.v = { x: side2, y: -this.rng.range(12, 28), z: res.q > 0 ? this.rng.range(6, 22) : this.rng.range(-8, 2) };
-        ball.w = { x: 0, y: 0, z: 0 };
-        this.world.ball.mode = 'dead';
-        this.state.strikes = Math.min(2, this.state.strikes + 1);
-        this.message = 'Foul ball';
-        this.onEvent({ type: 'foul' });
-        this.wait('afterFoul', 1.0);
-        return;
-      }
-      // Ball in play (or foul off the bat): launch it
+      this.stealers = null;
+      entry.result = this.bunting ? 'Foul bunt' : 'Foul';
+      this.pitchOutcome = 'foul';
+      const side2 = res.foulBack ? this.rng.gauss(0, 14) : this.rng.gauss(0, 5);
+      ball.v = { x: side2, y: -this.rng.range(12, 28), z: res.q > 0 ? this.rng.range(6, 22) : this.rng.range(-8, 2) };
+      ball.w = { x: 0, y: 0, z: 0 };
+      this.world.ball.mode = 'dead';
+      this.state.strikes = Math.min(2, this.state.strikes + 1);
+      this.message = 'Foul ball';
+      this.onEvent({ type: 'foul' });
+      this.wait('afterFoul', 1.0);
+      return;
+    }
+    if (o === 'inplay') {
       pl.strikes++;
       entry.result = 'In play';
       const bb = { ...res, type: battedType(res.la), bunt: !!this.bunting, buntKind: this.bunting };
@@ -684,17 +836,12 @@ export class Game {
       this.onEvent({ type: 'contact', bb });
       return;
     }
-    // take: umpire call
-    const hbpX = side === 'R' ? ball.p.x < -0.64 : ball.p.x > 0.64;
-    if (hbpX && ball.p.z > 0.25 && ball.p.z < 1.7 && Math.abs(ball.p.x) < 1.1) {
+    if (o === 'hbp') {
       entry.result = 'Hit by pitch';
       this.pitchOutcome = 'hbp';
       return;
     }
-    const nx = ball.p.x + this.rng.gauss(0, 0.018);
-    const nz = ball.p.z + this.rng.gauss(0, 0.018);
-    const strike = Math.abs(nx) <= ZONE.halfW && nz >= ZONE.bot - 0.037 && nz <= ZONE.top + 0.037;
-    if (strike) {
+    if (o === 'called') {
       entry.result = 'Called strike';
       this.pitchOutcome = 'called';
       pl.strikes++;

@@ -75,6 +75,11 @@
       <button id="btn-next" title="Skip to next batter (N)">Next AB</button>
       <button id="btn-inning" title="Skip to next half-inning">Sim ½ inn</button>
       <button id="btn-end" title="Simulate to the end">Sim game</button>
+      <select id="watch" title="What to watch (W)">
+        <option value="all">Every pitch</option>
+        <option value="last">Last pitch only</option>
+      </select>
+      <button id="btn-count" class="hidden" title="Show or hide the count in last-pitch mode">Count: shown</button>
       <select id="camera" title="Camera (C)">
         <option value="broadcast">Broadcast cam</option>
         <option value="plate">Umpire cam</option>
@@ -112,6 +117,8 @@
           </div>
         </div>
         <label class="check"><input type="checkbox" id="opt-ghost" checked> Extra innings start with a runner on second</label>
+        <label class="check"><input type="checkbox" id="opt-last"> Watch only the last pitch of each at-bat (the rest are simmed instantly)</label>
+        <label class="check sub" id="opt-hide-wrap"><input type="checkbox" id="opt-hide"> Hide the count, so you can't tell what's coming</label>
         <div class="actions">
           <button id="btn-edit">Edit rosters</button>
           <button id="btn-start" class="primary big">Play ball</button>

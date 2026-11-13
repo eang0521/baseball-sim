@@ -9,7 +9,7 @@ import { Sound } from './ui/sound.js';
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
-const prefs = Object.assign({ speed: 1, camera: 'broadcast', log: true, league: 'custom', picks: {} }, loadPrefs());
+const prefs = Object.assign({ speed: 1, camera: 'broadcast', log: true, league: 'custom', picks: {}, lastPitch: false, hideCount: false }, loadPrefs());
 let league = prefs.league;
 let teams;
 try {
@@ -108,7 +108,7 @@ $('btn-start').addEventListener('click', () => {
 });
 
 function startGame(away, home, awaySP, homeSP, ghost) {
-  game = new Game(away, home, { awayStarter: awaySP, homeStarter: homeSP, extraRunner: ghost });
+  game = new Game(away, home, { awayStarter: awaySP, homeStarter: homeSP, extraRunner: ghost, lastPitchOnly: prefs.lastPitch });
   stage.setTeams(game);
   hud.setGame(game);
   $('setup').classList.add('hidden');
@@ -119,6 +119,30 @@ function startGame(away, home, awaySP, homeSP, ghost) {
   $('btn-play').textContent = '⏸';
   finalShown = false;
 }
+
+// ---------- watch mode: every pitch, or only the one that ends each at-bat ----------
+function syncWatch() {
+  $('opt-last').checked = prefs.lastPitch;
+  $('opt-hide').checked = prefs.hideCount;
+  $('opt-hide').disabled = !prefs.lastPitch;
+  $('opt-hide-wrap').classList.toggle('disabled', !prefs.lastPitch);
+  $('watch').value = prefs.lastPitch ? 'last' : 'all';
+  $('btn-count').classList.toggle('hidden', !prefs.lastPitch);
+  $('btn-count').textContent = prefs.hideCount ? 'Count: hidden' : 'Count: shown';
+  hud.hideCount = prefs.lastPitch && prefs.hideCount;
+  if (game) game.setLastPitchOnly(prefs.lastPitch);
+}
+function setWatch(last, hide = prefs.hideCount) {
+  prefs.lastPitch = last;
+  prefs.hideCount = hide;
+  savePrefs(prefs);
+  syncWatch();
+}
+$('opt-last').addEventListener('change', (e) => setWatch(e.target.checked));
+$('opt-hide').addEventListener('change', (e) => setWatch(prefs.lastPitch, e.target.checked));
+$('watch').addEventListener('change', (e) => { setWatch(e.target.value === 'last'); e.target.blur(); });
+$('btn-count').addEventListener('click', () => setWatch(prefs.lastPitch, !prefs.hideCount));
+syncWatch();
 
 // ---------- controls ----------
 function setSpeed(v) {
@@ -201,6 +225,7 @@ window.addEventListener('keydown', (e) => {
   if (!$('editor').classList.contains('hidden')) return;
   if (e.code === 'Space') { e.preventDefault(); togglePause(); }
   else if (e.key === 'n' || e.key === 'N') $('btn-next').click();
+  else if (e.key === 'w' || e.key === 'W') setWatch(!prefs.lastPitch);
   else if (e.key === 'b' || e.key === 'B') openBox();
   else if (e.key === 'l' || e.key === 'L') $('btn-log').click();
   else if (e.key === 'c' || e.key === 'C') {
